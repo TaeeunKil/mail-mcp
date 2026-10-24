@@ -1,0 +1,36 @@
+# Python / build output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+# Local account configuration and secrets; commit only provided examples
+accounts.json
+accounts.*.json
+!accounts.example.json
+.env
+.env.*
+credentials/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+# Mail data and diagnostics must never enter the repository
+data/
+mail/
+mail-cache/
+cache/
+logs/
+*.log
+*.eml
+*.mbox
+# Local editors and OS
+.DS_Store
+.idea/
+.vscode/
