@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 import ssl
 import pytest
 from imap_connector.core import (Connector, ConnectorError, BoundedIMAP, load_accounts,
@@ -13,6 +14,7 @@ ATTACH=b'("APPLICATION" "PDF" ("NAME" "secret.pdf") NIL NIL "BASE64" 999 NIL ("A
 class Fake:
     def __init__(self,*args,**kwargs):
         self.calls=[]; self.validity=b'123'; self.large=False
+        self.part=PLAIN; self.body=base64.b64encode('안녕'.encode())
         assert kwargs['ssl_context'].verify_mode==ssl.CERT_REQUIRED
         assert kwargs['ssl_context'].check_hostname is True
         assert kwargs['timeout']==15
@@ -31,12 +33,12 @@ class Fake:
         assert cmd=='FETCH'
         uid, query=args
         if 'BODYSTRUCTURE' in query:
-            part=PLAIN.replace(b'12 1',b'999999 1') if self.large else PLAIN
+            part=self.part.replace(b'12 1',b'999999 1') if self.large else self.part
             return 'OK',[b'1000 (UID '+uid.encode()+b' RFC822.SIZE 10000 BODYSTRUCTURE ('+part+b' '+ATTACH+b' "MIXED" NIL NIL))']
         assert 'BODY.PEEK' in query
         if '[HEADER]' in query: return 'OK',[(b'header',HEADER)]
         assert '[1]' in query  # attachment section 2 must NEVER be fetched
-        return 'OK',[(b'body',base64.b64encode('안녕'.encode()))]
+        return 'OK',[(b'body',self.body)]
 
 @pytest.fixture
 def setup(monkeypatch):
@@ -66,6 +68,18 @@ def test_read_decodes_skips_attachment(setup):
     assert not result['attachments_downloaded']
     assert result['content_is_untrusted']
     assert all('[2]' not in str(x) for x in f.calls)
+    assert ('LOGOUT',) in f.calls
+
+def test_html_body_returns_korean_text_without_active_markup(setup):
+    c,f=setup
+    html='<p>안녕하세요</p><script>실행하지 마세요</script><div>메일 <b>내용</b></div>'
+    raw=html.encode('utf-8')
+    encoded=base64.b64encode(raw)
+    f.part=('("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" '+str(len(encoded))+' 1 NIL NIL)').encode()
+    f.body=encoded
+    result=c.read_message(make_id('naver','INBOX',123,502))
+    assert result['text']=='\n안녕하세요\n메일 내용'
+    assert '실행하지 마세요' not in result['text']
 
 def test_large_body_never_fetched(setup):
     c,f=setup; f.large=True
@@ -105,6 +119,14 @@ def test_config_rejects_secrets(tmp_path):
     path.write_text(json.dumps({'accounts':ACCOUNTS}))
     assert load_accounts(path)==ACCOUNTS
 
+def test_naver_example_config_is_single_account_and_secret_free():
+    path=Path(__file__).resolve().parents[1]/'accounts.naver.example.json'
+    accounts=load_accounts(path)
+    assert list(accounts)==['naver']
+    assert accounts['naver']['host']=='imap.naver.com'
+    assert accounts['naver']['username_env']=='NAVER_IMAP_USER'
+    assert accounts['naver']['password_env']=='NAVER_IMAP_APP_PASSWORD'
+
 @pytest.mark.parametrize('field,value',[('host','localhost\r\n'),('port',False),('password_env','wrong-name'),('username_env',42)])
 def test_config_invalid(tmp_path,field,value):
     a=json.loads(json.dumps(ACCOUNTS)); a['naver'][field]=value
@@ -118,6 +140,16 @@ def test_server_errors_do_not_leak_credentials(setup):
     f.login=broken
     with pytest.raises(ConnectorError) as exc: c.list_folders('naver')
     assert 'dummy-not-a-secret' not in str(exc.value)
+    assert ('LOGOUT',) in f.calls
+
+def test_missing_credentials_block_before_connect(monkeypatch):
+    monkeypatch.delenv('TEST_USER', raising=False)
+    monkeypatch.delenv('TEST_PASS', raising=False)
+    calls=[]
+    c=Connector(ACCOUNTS,lambda *a,**kw:calls.append((a,kw)))
+    with pytest.raises(ConnectorError,match='Set account credential environment variables'):
+        c.list_folders('naver')
+    assert calls==[]
 
 def test_empty_mailbox(setup):
     c,f=setup; f.select=lambda *a,**k:('OK',[b'0'])

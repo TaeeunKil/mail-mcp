@@ -1,0 +1,10 @@
+{
+  "accounts": {
+    "naver": {
+      "host": "imap.naver.com",
+      "port": 993,
+      "username_env": "NAVER_IMAP_USER",
+      "password_env": "NAVER_IMAP_APP_PASSWORD"
+    }
+  }
+}

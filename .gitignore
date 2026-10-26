@@ -13,6 +13,7 @@ htmlcov/
 accounts.json
 accounts.*.json
 !accounts.example.json
+!accounts.naver.example.json
 .env
 .env.*
 credentials/
