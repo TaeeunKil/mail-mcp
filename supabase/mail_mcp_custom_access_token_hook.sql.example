@@ -1,12 +1,14 @@
 -- TEMPLATE ONLY. Do not run unchanged.
--- Replace both placeholders with the single OAuth client ID and exact public
--- MCP resource URL. These are identifiers, not secrets. The hook never reads
--- Naver credentials and does not need a service_role key.
+-- Replace all three placeholders with the exact OAuth client ID, public MCP
+-- resource URL, and the owner's immutable Supabase `sub` UUID. These are
+-- identifiers, not secrets. Never use an email address as the owner identity.
+-- The hook never reads Naver credentials and does not need a service_role key.
 --
 -- Supabase Auth > Hooks > Custom Access Token Hook must be enabled explicitly
--- after reviewing these values. The hook changes claims only for this one
--- OAuth client. Supabase's own `scope` values remain OIDC scopes; the custom
--- `mail_mcp_scopes` claim is an independent permission checked by this server.
+-- after reviewing these values. It changes the audience and adds the custom
+-- permission only for this OAuth client and owner; all other claims are kept.
+-- Supabase's own `scope` values remain OIDC scopes; `mail_mcp_scopes` is an
+-- independent permission checked by this server.
 
 create or replace function public.mail_mcp_custom_access_token_hook(event jsonb)
 returns jsonb
@@ -21,17 +23,20 @@ declare
   token_client_id text;
   allowed_client_id constant text := '<REPLACE_WITH_SUPABASE_OAUTH_CLIENT_ID>';
   mcp_resource_url constant text := '<REPLACE_WITH_EXACT_HTTPS_MCP_RESOURCE_URL>';
+  allowed_owner_sub constant text := '<REPLACE_WITH_OWNER_SUB_UUID>';
 begin
   if original_claims is null or jsonb_typeof(original_claims) <> 'object' then
     raise exception 'Supabase access token claims are missing';
   end if;
 
   token_client_id := original_claims ->> 'client_id';
-  updated_claims := original_claims - 'mail_mcp_scopes';
+  updated_claims := original_claims;
 
   if allowed_client_id <> '<REPLACE_WITH_SUPABASE_OAUTH_CLIENT_ID>'
      and mcp_resource_url <> '<REPLACE_WITH_EXACT_HTTPS_MCP_RESOURCE_URL>'
-     and token_client_id = allowed_client_id then
+     and allowed_owner_sub <> '<REPLACE_WITH_OWNER_SUB_UUID>'
+     and token_client_id = allowed_client_id
+     and original_claims ->> 'sub' = allowed_owner_sub then
     updated_claims := pg_catalog.jsonb_set(
       updated_claims,
       '{aud}',

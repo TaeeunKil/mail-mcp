@@ -8,8 +8,8 @@
 - 원격 Naver IMAP 목적지는 `imap.naver.com:993` TLS로 고정됩니다.
 - 원격 기본 모드는 `diagnostic`이며 정적 `service_status` 하나만 공개합니다. 메일 환경변수는 이 모드에서 읽지 않습니다.
 - `MAIL_MCP_MODE=token`을 명시했을 때만 Bearer 인증 뒤 메일 도구를 등록합니다. 토큰 또는 네이버 설정이 누락/잘못되면 `/mcp`는 503으로 fail closed합니다. 모든 MCP 요청은 `Authorization: Bearer …` 인증을 먼저 통과해야 합니다.
-- Bearer 방식은 데스크톱 Codex용이며 ChatGPT 웹/cloud dot에는 OAuth 모드가 필요합니다. Supabase OAuth consent와 JWT 검증 코드는 로컬 변경에 준비됐지만 실제 OAuth client 등록과 end-to-end 검증은 끝나지 않았습니다.
-- 현재 배포는 b0494b4 진단 버전입니다. 최신 OAuth 코드는 로컬 변경이므로 배포 상태와 혼동하지 마세요. Supabase client 생성은 승인 대기 중입니다.
+- Bearer 방식은 데스크톱 Codex용이며 ChatGPT 웹/cloud dot에는 OAuth 모드가 필요합니다. Supabase public PKCE OAuth client는 등록됐고 DCR은 꺼져 있습니다. OAuth consent와 JWT 검증 코드는 배포됐지만 owner UUID와 Custom Access Token Hook 설정, end-to-end 인증 검증은 남아 있습니다.
+- 새 코드의 Vercel 배포 상태는 성공으로 확인했습니다. Production은 진단 모드이며 메일 접근 설정, OAuth owner UUID 및 Hook은 아직 구성되지 않았습니다. 실제 HTTP initialize/consent/token exchange는 검증하지 않았습니다.
 
 [데스크톱 Codex/Vercel 설정 안내](VERCEL.md), [네이버 로컬 첫 연결 안내](NAVER_SETUP.md), [보안 안내](SECURITY.md)를 확인하세요.
 
@@ -98,7 +98,7 @@ MCP 호스트 없이 `.venv/bin/python -m imap_connector.server`를 실행하면
 
 ## 검증
 
-현재 실행한 96개 단위 테스트는 통과했습니다. 전체 115개 suite는 Windows 환경에서 MCP HTTP/stdio 시작이 멈춰 완료되지 않았습니다. 자세한 실행 및 미검증 상태는 TEST_REPORT.md를 참조하세요.
+현재 실행한 97개 단위 테스트는 통과했습니다. 전체 115개 suite는 Windows 환경에서 MCP HTTP/stdio 시작이 멈춰 완료되지 않았습니다. 자세한 실행 및 미검증 상태는 TEST_REPORT.md를 확인하세요.
 
 ## 다음 연결 단계
 

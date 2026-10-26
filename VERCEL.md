@@ -2,8 +2,8 @@
 
 ## 현재 배포 상태
 
-- 현재 주소는 <https://mail-mcp-beta.vercel.app/>이며 배포된 코드는 `b049b4ee7b4c3d4d30dc7b0969cfe123bfe29c23`입니다. 이 배포는 인증 없는 정적 `service_status`만 제공하는 진단 버전입니다.
-- 이번 로컬 변경에는 데스크톱 Codex용 Bearer 인증 코드와 설정 안내가 추가됐지만, 아직 push 또는 Vercel 배포하지 않았습니다. 따라서 현재 주소에는 이 토큰 인증 기능이 적용되지 않았습니다.
+- 현재 주소는 <https://mail-mcp-beta.vercel.app/>입니다. 최신 main push의 Vercel 배포 체크는 성공했습니다. Production은 현재 진단 모드를 유지하며 실제 HTTP 응답은 이 작업에서 확인하지 못했습니다.
+- 이번 배포에는 데스크톱 Bearer 모드와 Supabase OAuth consent/JWT 검증 코드가 포함됐습니다. 배포됐다는 사실은 메일 접근이 활성화됐다는 뜻이 아닙니다. 진단 모드가 기본이며 필요한 인증·메일 설정이 모두 있어야 전용 모드가 작동합니다.
 - Chrome에서 `/` 안내 화면은 정상 표시됐다는 사용자 확인이 있습니다. `/mcp` 브라우저 탐색은 `ERR_BLOCKED_BY_CLIENT`, 별도 HTTP 요청은 DNS 제한/도구의 URL 접근 거부로 응답을 얻지 못했습니다. `initialize`, `tools/list`, `service_status`의 실제 HTTP 응답은 검증되지 않았고 서버 오류로 확정할 수도 없습니다.
 - 현재까지 네이버 메일, OAuth 공급자, 토큰, 앱 비밀번호를 사용하지 않았습니다.
 
@@ -45,7 +45,7 @@ Vercel 함수는 `app.py`의 ASGI 앱을 사용하고 MCP SDK 2.3.0의 stateless
    | `NAVER_IMAP_USER` | 네이버 메일 주소 |
    | `NAVER_IMAP_APP_PASSWORD` | 네이버에서 발급한 앱 비밀번호 |
 
-3. 기존 배포가 아니라 새 코드를 포함한 배포가 준비된 뒤 Production 재배포를 실행해야 환경변수가 적용됩니다. 현재 배포에는 로컬 Bearer 변경이 아직 올라가지 않았습니다.
+3. Production 환경변수는 해당 코드가 포함된 deployment가 성공한 뒤 적용됩니다. 모드가 명시되지 않았거나 인증·메일 설정이 부족하면 진단 전용 또는 fail-closed 상태로 남습니다.
 4. 데스크톱 Codex 사용자 설정에서 맞춤형 MCP 연결을 만들고 Streamable HTTP를 선택합니다. URL은 `https://mail-mcp-beta.vercel.app/mcp`입니다. 인증 토큰 환경변수 이름에 `MAIL_MCP_TOKEN`을 넣고, Codex 사용자 환경변수에도 Vercel과 같은 값을 직접 설정합니다.
 5. Codex를 재시작한 다음 연결을 확인합니다. `service_status`는 구성값이 준비됐다고만 보고하며 네이버 IMAP 로그인을 시험하지 않습니다. 실제 메일 연결 테스트는 소유자가 승인한 뒤에만 진행해야 합니다.
 
@@ -74,8 +74,8 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 - 기존 wordloop 프로젝트는 수정하지 않았습니다. 별도 Supabase 프로젝트 `mail-mcp-auth`는 Free/Seoul이고 OAuth Server를 활성화했습니다.
 - Supabase Site URL은 `https://mail-mcp-beta.vercel.app`, Authorization Path는 `/oauth/consent`로 확인했습니다. 이 조합의 동의 화면 경로는 `https://mail-mcp-beta.vercel.app/oauth/consent`입니다.
 - ChatGPT가 보여준 등록 callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. Supabase OAuth Apps에 정확히 일치하는 URI로 등록해야 합니다. 와일드카드는 사용하지 않습니다.
-- Dynamic Client Registration은 OFF입니다. 공개 PKCE client 생성은 승인 대기 중이며, 아직 client ID는 없습니다. 비밀값을 만들거나 추측하지 마세요.
-- 배포된 `b0494ee7b4c3d4d30dc7b0969cfe123bfe29c23`에는 `/oauth/consent`가 없어 현재 Production에서 404입니다. 로컬 코드에는 이 경로가 포함됐으며, 필요한 설정이 없을 때는 503을 반환합니다. 로컬 변경은 아직 배포 상태를 바꾸지 않습니다.
+- Dynamic Client Registration은 OFF입니다. 공개 PKCE client는 생성됐고 ChatGPT callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. client 식별자는 Vercel의 `MAIL_MCP_OAUTH_CLIENT_ID`에 설정해야 하며 소스에 저장하지 않습니다. 전체 OAuth 흐름은 아직 검증하지 않았습니다.
+- 최신 코드가 main에서 배포됐고 Vercel 배포 체크는 성공입니다. 코드에는 `/oauth/consent` 경로가 포함됐지만 이 실행환경에서 해당 URL의 실제 HTTP 응답을 얻지 못했습니다. Vercel에 OAuth client ID/owner UUID와 Hook, 메일 설정이 없으므로 Production은 진단 상태입니다.
 
 ### 로그인과 동의 흐름
 
@@ -95,7 +95,7 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 | `MAIL_MCP_MODE` | OAuth 모드 opt-in 값 `oauth` |
 | `SUPABASE_URL` | Supabase 프로젝트 URL |
 | `SUPABASE_PUBLISHABLE_KEY` | 브라우저 SDK용 공개 publishable key |
-| `MAIL_MCP_OAUTH_CLIENT_ID` | 승인 후 생성되는 단일 공개 PKCE client ID |
+| `MAIL_MCP_OAUTH_CLIENT_ID` | 등록된 공개 PKCE client 식별자. Vercel에 직접 설정하며 source에 넣지 않습니다. |
 | `MAIL_MCP_OWNER_SUB` | Supabase 로그인 후 확인한 소유자 UUID |
 | `MAIL_MCP_RESOURCE_URL` | 정확한 보호 리소스 URL `https://mail-mcp-beta.vercel.app/mcp` |
 | `NAVER_IMAP_USER` | Naver 메일 주소 |
@@ -103,11 +103,11 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 
 `SUPABASE_PUBLISHABLE_KEY`는 공개 클라이언트 키이며 secret/service_role key와 다릅니다. 브라우저나 환경변수에 service_role key를 추가하지 않습니다. 환경변수가 모두 저장되고 Production 재배포가 끝나기 전에는 연결 완료로 표시하지 않습니다.
 
-Custom Access Token Hook SQL은 `supabase/mail_mcp_custom_access_token_hook.sql.example`에 자리표시자로만 있습니다. client ID와 resource URL이 확인된 뒤 검토해서 Supabase Auth Hook으로 적용해야 합니다. 이 코드는 데이터베이스 SDK나 service_role 권한을 요구하지 않습니다.
+Custom Access Token Hook SQL은 예시일 뿐 실행되지 않았습니다. owner `sub` UUID, client ID, resource URL 세 placeholder를 채운 뒤, exact client ID와 owner UUID가 모두 일치할 때만 `aud`와 `mail_mcp_scopes=["mail:read"]`를 설정하도록 제한되어 있습니다. owner UUID가 아직 확인되지 않았으므로 Hook을 활성화하거나 SQL을 실행하지 마세요. 적용 전에는 resource URL `https://mail-mcp-beta.vercel.app/mcp`를 정확히 대입하고 검토하세요. DB SDK나 service_role은 필요하지 않습니다.
 
 ### 현재 확인되지 않은 항목
 
-- 부모 브라우저에서 OAuth 활성화와 Site URL/Authorization Path를 확인했지만, client 생성은 승인 대기 중이며 OAuth authorization/consent 전체 흐름은 실행하지 않았습니다.
+- 브라우저에서 OAuth Server, Site URL/Authorization Path, DCR OFF 및 공개 PKCE client 생성을 확인했습니다. ChatGPT callback URI도 등록됐습니다. owner UUID와 audience/권한 Hook은 미설정이며 authorization/consent/token exchange는 end-to-end 검증하지 않았습니다.
 - 프로젝트 JWKS는 ES256으로 확인됐고 로컬 검증기는 ES256 및 RS256을 제한적으로 허용합니다. 실제 Supabase 토큰이나 ChatGPT callback을 로컬 테스트에 사용하지 않았습니다.
 - Supabase OAuth가 MCP 클라이언트의 `resource`, `offline_access`, 공개 PKCE 조합을 처리하지 못했다는 [공개 호환성 보고](https://github.com/supabase/auth/issues/2820)가 있습니다. 사용자 프로젝트에서 재현됐다는 뜻은 아닙니다. 실제 client 등록 후 authorize → 로그인 → 동의 → callback → MCP token 요청을 확인해야 합니다.
 - 테스트는 합성 RSA/ES256 키와 모의 claim만 사용했습니다. 메일 연결, 실제 OAuth grant, 비밀 등록, production OAuth 요청은 수행하지 않았습니다.

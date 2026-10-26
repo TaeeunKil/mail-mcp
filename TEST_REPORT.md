@@ -3,7 +3,7 @@
 ## 2026-10-26 로컬 OAuth 준비
 
 - 작업 위치: `C:\Users\user\Documents\Codex\2026-10-26\task-2\mail-mcp`.
-- Supabase OAuth 단위 테스트: **50 passed**.
+- Supabase OAuth 관련 테스트: **51 passed**.
 - IMAP core 단위 테스트: **32 passed**.
 - Bearer/Base64 및 설정 단위 테스트: **14 passed, 10 deselected**. 선택된 테스트는 HTTP `TestClient`를 사용하지 않는 설정/토큰 형식 검증입니다.
 - `python -m compileall -q app.py imap_connector tests`: 통과.
@@ -29,10 +29,10 @@
 ## 브라우저에서 확인한 설정과 미검증 상태
 
 - 별도 `mail-mcp-auth` Supabase Free/Seoul 프로젝트, OAuth Server 활성화, Site URL `https://mail-mcp-beta.vercel.app`, Authorization Path `/oauth/consent`, DCR OFF가 부모 브라우저에서 확인됐습니다.
-- ChatGPT callback은 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`로 확인됐습니다. 공개 PKCE client 생성은 승인 대기 중입니다.
-- 현재 Production 코드는 `b0494b4`이며 `/oauth/consent`는 아직 404입니다. 로컬 코드는 배포되지 않았습니다.
+- ChatGPT callback은 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`로 등록됐고, 공개 PKCE client 생성이 완료됐습니다. DCR은 OFF입니다. owner UUID와 Custom Access Token Hook은 미설정입니다.
+- 최신 main push의 Vercel 배포 체크는 성공입니다. 배포된 소스에는 `/oauth/consent`가 포함되지만 실제 HTTP 응답은 이 실행환경에서 확인하지 못했습니다.
 - 실제 `initialize`, OAuth callback/consent/token exchange, owner UUID, JWKS HTTP fetch, Naver login/mail read는 확인하지 않았습니다.
-- Push와 redeploy는 이번 로컬 검증 보고 이후 승인된 절차로 진행합니다. 실제 OAuth client 생성은 별도 승인 대기이며, 실제 Naver 비밀값은 사용자가 직접 Vercel에 설정해야 합니다.
+- 공개 저장소 push, GitHub Actions `Offline tests`, Vercel 배포 체크가 성공했습니다. 실제 OAuth client 생성은 완료됐지만 owner UUID/Hook과 실제 Naver 비밀값은 미설정이며, 실제 메일 접근은 열지 않았습니다.
 
 ## Windows 테스트 런타임 진단
 

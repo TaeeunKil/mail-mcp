@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 import time
 
@@ -295,3 +296,17 @@ def test_synthetic_naver_configuration_registers_only_existing_read_tools():
     tool_names = set(server._tool_manager._tools)
     assert tool_names == {"service_status", "list_accounts", "list_folders", "search_messages", "read_message"}
     assert tool_names.isdisjoint({"send_email", "delete_email", "move_email", "mark_read"})
+
+
+def test_custom_access_token_hook_template_requires_client_and_owner():
+    hook = (Path(__file__).parents[1] / "supabase" / "mail_mcp_custom_access_token_hook.sql.example").read_text(encoding="utf-8")
+
+    assert "<REPLACE_WITH_SUPABASE_OAUTH_CLIENT_ID>" in hook
+    assert "<REPLACE_WITH_EXACT_HTTPS_MCP_RESOURCE_URL>" in hook
+    assert "<REPLACE_WITH_OWNER_SUB_UUID>" in hook
+    assert "and token_client_id = allowed_client_id then" not in hook
+    assert "and token_client_id = allowed_client_id" in hook
+    assert "and original_claims ->> 'sub' = allowed_owner_sub then" in hook
+    assert "updated_claims := original_claims;" in hook
+    assert "original_claims - 'mail_mcp_scopes'" not in hook
+    assert "service_role key" in hook
