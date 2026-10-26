@@ -1,16 +1,21 @@
 # mail-mcp
 
-네이버 메일 읽기 전용 MCP · 로컬 프로토타입
+네이버 메일 한 계정을 대상으로 하는 읽기 전용 MCP입니다. 로컬 `stdio` 사용을 유지하고, Vercel용 stateless Streamable HTTP 진단 경로와 데스크톱 Codex용 개인 Bearer 인증 모드를 제공합니다. Python 3.11 이상과 MCP Python SDK 2.3.0을 사용합니다.
 
-먼저 **본인의 네이버 메일 한 계정**으로 시험할 수 있는 읽기 전용 IMAP 도구입니다. 설정 구조는 일반 IMAP 계정도 표현할 수 있지만, 회사 메일 호환성은 향후 별도 검증 대상입니다. **최소 실행 가능 개발용 버전**입니다. 계정 목록, 폴더 목록, 최근 메일 검색, 본문 읽기를 제공합니다. Python 3.11 이상과 공식 MCP Python SDK 2.3.0을 사용합니다.
+## 지원 범위와 현재 상태
 
-**현재 dot에 연결된 서비스는 아닙니다.** 이 저장소는 기존 로컬 **stdio MCP**를 유지하고, Vercel용 stateless Streamable HTTP와 한국어 안내 화면을 추가합니다. 인증되지 않은 원격 서버에는 진단 도구 하나만 있으며 실제 메일 도구는 노출되지 않습니다. OAuth, 소유자 전용 인증, 비밀 저장, 원격 메일 도구, 실제 dot 연결 경로는 구현되지 않았습니다. 설정 없이 공개할 수 있는 것은 민감 정보가 없는 진단 모드뿐입니다. 배포 전 보안 경계는 [Vercel 안내](VERCEL.md)를 확인하세요.
+- `list_accounts`, `list_folders`, `search_messages`, `read_message`만 제공합니다. 메일 발송, 삭제, 이동, 읽음 변경, 첨부 다운로드, SMTP 기능은 없습니다.
+- 원격 Naver IMAP 목적지는 `imap.naver.com:993` TLS로 고정됩니다.
+- 원격 기본 모드는 `diagnostic`이며 정적 `service_status` 하나만 공개합니다. 메일 환경변수는 이 모드에서 읽지 않습니다.
+- `MAIL_MCP_MODE=token`을 명시했을 때만 Bearer 인증 뒤 메일 도구를 등록합니다. 토큰 또는 네이버 설정이 누락/잘못되면 `/mcp`는 503으로 fail closed합니다. 모든 MCP 요청은 `Authorization: Bearer …` 인증을 먼저 통과해야 합니다.
+- Bearer 방식은 데스크톱 Codex용이며 ChatGPT 웹/cloud dot에는 OAuth 모드가 필요합니다. Supabase OAuth consent와 JWT 검증 코드는 로컬 변경에 준비됐지만 실제 OAuth client 등록과 end-to-end 검증은 끝나지 않았습니다.
+- 현재 배포는 b0494b4 진단 버전입니다. 최신 OAuth 코드는 로컬 변경이므로 배포 상태와 혼동하지 마세요. Supabase client 생성은 승인 대기 중입니다.
+
+[데스크톱 Codex/Vercel 설정 안내](VERCEL.md), [네이버 로컬 첫 연결 안내](NAVER_SETUP.md), [보안 안내](SECURITY.md)를 확인하세요.
 
 ## 처음 시작하기
 
-Vercel용 원격 서버와 계정 설정 화면은 [Vercel 배포 및 보안 안내](VERCEL.md)를 참고하세요. 현재 `/`는 계정 입력 없이 안내만 제공하고, `/mcp`는 정적 진단만 응답합니다.
-
-본인의 네이버 메일 한 계정으로 시작하려면 [네이버 등록 및 첫 테스트 안내](NAVER_SETUP.md)를 순서대로 따라가세요. IMAP 정보 등록, 비밀 입력, 실제 읽기 시험, MCP 호스트 연결, 해제 방법까지 정리되어 있습니다.
+로컬 stdio 사용에는 [설치 및 계정 설정](#1-설치-macoslinux), Vercel을 통한 원격 설정에는 [Vercel 안내](VERCEL.md)를 참고하세요. 안내 웹 페이지는 토큰이나 비밀번호를 받거나 저장하지 않습니다.
 
 ## 1. 설치 (macOS/Linux)
 
@@ -93,11 +98,13 @@ MCP 호스트 없이 `.venv/bin/python -m imap_connector.server`를 실행하면
 
 ## 검증
 
-`pytest`는 가짜 IMAP 연결로 읽기 전용 명령, TLS 설정, 범위/크기 제한, 한글 헤더/HTML 본문, 첨부 제외, ID 변경, 설정 검증, 오류 비밀값 제거, 시간 제한, 세션 종료 로그아웃을 검사합니다. stdio 통합 테스트는 기존 MCP 도구 목록과 오프라인 계정 목록을 확인합니다. Streamable HTTP 테스트는 lifespan, 반복·동시 요청, 메일 도구 미노출, 한국어 안내 화면을 확인합니다. **실제 계정 로그인·메일 전송·외부 배포는 테스트하지 않습니다.**
+현재 실행한 96개 단위 테스트는 통과했습니다. 전체 115개 suite는 Windows 환경에서 MCP HTTP/stdio 시작이 멈춰 완료되지 않았습니다. 자세한 실행 및 미검증 상태는 TEST_REPORT.md를 참조하세요.
 
 ## 다음 연결 단계
 
-회사의 메일 서비스명과 IMAP 정책 확인 → 사용자가 자신의 기기에서 비밀 입력 → 허가된 실제 계정으로 읽음 상태/첨부 제한/한글 검색 시험 → dot이 지원하는 연결 방식 확인 → 원격 접근이 필요하면 인증·인가·비밀 저장·계정 격리·접근 로그를 구현한 뒤 공개 여부 승인. 로컬 stdio를 인증 없는 원격 서버로 바꾸는 것은 배포가 아닙니다.
+- 로컬 stdio에서 본인 네이버 계정을 연결하려면 `NAVER_SETUP.md`의 절차를 따르세요.
+- 데스크톱 Codex 원격 연결 절차는 [Vercel 안내](VERCEL.md)를 참고하세요. 실제 앱 비밀번호와 공유 토큰은 사용자가 Vercel/Codex 설정에 직접 넣어야 하며, 이 코드/안내 화면은 값을 저장하지 않습니다.
+- ChatGPT 웹/cloud dot 연결은 OAuth consent route, Supabase OAuth client, owner UUID 및 audience Hook이 모두 검증되어야 합니다. mail 설정 또는 인증 경계가 하나라도 빠지면 원격 메일 도구는 열리지 않습니다.
 
 ## 참고
 

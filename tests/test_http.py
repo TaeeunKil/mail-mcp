@@ -5,15 +5,19 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from app import app
 from imap_connector import server as stdio_server
-from imap_connector.http_server import remote_mcp
+from imap_connector.http_server import create_http_app
+
+remote_mcp, app = create_http_app(environ={})
 
 
-def rpc(client, method, params=None, request_id=1):
+def rpc(client, method, params=None, request_id=1, headers=None):
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
     return client.post(
         "/mcp",
-        headers={"Accept": "application/json"},
+        headers=request_headers,
         json={
             "jsonrpc": "2.0",
             "id": request_id,
@@ -78,9 +82,9 @@ def test_remote_server_exposes_only_static_diagnostics(client):
     }
 
 
-def test_unauthenticated_mail_tools_are_unavailable_without_connector_calls(client, monkeypatch):
+def test_diagnostic_server_does_not_register_mail_tools_or_read_settings(client, monkeypatch):
     def forbidden(*args, **kwargs):
-        raise AssertionError("remote diagnostics must never instantiate the mail connector")
+        raise AssertionError("diagnostics must never instantiate the mail connector")
 
     monkeypatch.setattr(stdio_server, "connector", forbidden)
     response = rpc(
@@ -133,7 +137,18 @@ def test_setup_page_does_not_collect_or_store_credentials(client):
     assert 'lang="ko"' in response.text
     assert "NAVER_IMAP_USER" in response.text
     assert "NAVER_IMAP_APP_PASSWORD" in response.text
+    assert "MAIL_MCP_TOKEN" in response.text
+    assert "RandomNumberGenerator]::Create()" in response.text
+    assert "ToBase64String($bytes)" in response.text
+    assert "표준 Base64" in response.text
+    assert "Authorization: Bearer" in response.text
     assert "<form" not in response.text.lower()
     assert "<input" not in response.text.lower()
     assert "localstorage" not in response.text.lower()
-    assert "일반 네이버 로그인 암호" in response.text
+
+
+def test_diagnostic_mode_rejects_url_tokens(client):
+    response = client.get("/mcp?access_token=never-use-url-tokens")
+    assert response.status_code == 400
+    assert response.json() == {"error": "url_tokens_not_supported"}
+    assert "never-use-url-tokens" not in response.text

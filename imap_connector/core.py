@@ -215,16 +215,19 @@ class HTMLText(HTMLParser):
 
 
 class Connector:
-    def __init__(self, accounts, factory=BoundedIMAP): self.accounts=accounts; self.factory=factory
+    def __init__(self, accounts, factory=BoundedIMAP, environ=None):
+        self.accounts=accounts
+        self.factory=factory
+        self.environ=os.environ if environ is None else environ
 
     def list_accounts(self):
-        return [{'account': name, 'configured': bool(os.getenv(a['username_env']) and os.getenv(a['password_env']))} for name, a in self.accounts.items()]
+        return [{'account': name, 'configured': bool(self.environ.get(a['username_env']) and self.environ.get(a['password_env']))} for name, a in self.accounts.items()]
 
     @contextmanager
     def connect(self, account):
         if not isinstance(account, str) or account not in self.accounts: raise ConnectorError("Unknown account")
         a = self.accounts[account]
-        user, password = os.getenv(a['username_env']), os.getenv(a['password_env'])
+        user, password = self.environ.get(a['username_env']), self.environ.get(a['password_env'])
         if not user or not password: raise ConnectorError("Set account credential environment variables locally; never send secrets in chat")
         clean(user, 320); clean(password, 2048)
         c = None

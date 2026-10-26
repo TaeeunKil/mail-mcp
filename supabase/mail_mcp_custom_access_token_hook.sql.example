@@ -1,0 +1,56 @@
+-- TEMPLATE ONLY. Do not run unchanged.
+-- Replace both placeholders with the single OAuth client ID and exact public
+-- MCP resource URL. These are identifiers, not secrets. The hook never reads
+-- Naver credentials and does not need a service_role key.
+--
+-- Supabase Auth > Hooks > Custom Access Token Hook must be enabled explicitly
+-- after reviewing these values. The hook changes claims only for this one
+-- OAuth client. Supabase's own `scope` values remain OIDC scopes; the custom
+-- `mail_mcp_scopes` claim is an independent permission checked by this server.
+
+create or replace function public.mail_mcp_custom_access_token_hook(event jsonb)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  original_claims jsonb := event -> 'claims';
+  updated_claims jsonb;
+  token_client_id text;
+  allowed_client_id constant text := '<REPLACE_WITH_SUPABASE_OAUTH_CLIENT_ID>';
+  mcp_resource_url constant text := '<REPLACE_WITH_EXACT_HTTPS_MCP_RESOURCE_URL>';
+begin
+  if original_claims is null or jsonb_typeof(original_claims) <> 'object' then
+    raise exception 'Supabase access token claims are missing';
+  end if;
+
+  token_client_id := original_claims ->> 'client_id';
+  updated_claims := original_claims - 'mail_mcp_scopes';
+
+  if allowed_client_id <> '<REPLACE_WITH_SUPABASE_OAUTH_CLIENT_ID>'
+     and mcp_resource_url <> '<REPLACE_WITH_EXACT_HTTPS_MCP_RESOURCE_URL>'
+     and token_client_id = allowed_client_id then
+    updated_claims := pg_catalog.jsonb_set(
+      updated_claims,
+      '{aud}',
+      pg_catalog.to_jsonb(mcp_resource_url),
+      true
+    );
+    updated_claims := pg_catalog.jsonb_set(
+      updated_claims,
+      '{mail_mcp_scopes}',
+      pg_catalog.to_jsonb(array['mail:read']::text[]),
+      true
+    );
+  end if;
+
+  return pg_catalog.jsonb_build_object('claims', updated_claims);
+end;
+$$;
+
+revoke all on function public.mail_mcp_custom_access_token_hook(jsonb)
+  from public, anon, authenticated, service_role;
+grant execute on function public.mail_mcp_custom_access_token_hook(jsonb)
+  to supabase_auth_admin;
