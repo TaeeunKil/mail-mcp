@@ -18,6 +18,10 @@ class ConnectorError(ValueError):
     """Safe, credential-free errors for tool clients."""
 
 
+MAX_IMAP_UID = 2**32 - 1
+MAX_UIDVALIDITY_MARKER = 2**63 - 1
+
+
 def bounded_int(value, low, high):
     if type(value) is not int or not low <= value <= high:
         raise ConnectorError(f"Expected integer {low}..{high}")
@@ -180,7 +184,8 @@ def decode_id(value):
         if not isinstance(parts, list) or len(parts) != 4: raise ValueError()
         account, mailbox, validity, uid = parts
         clean(account, 40); clean(mailbox)
-        bounded_int(validity, 1, 2**32-1); bounded_int(uid, 1, 2**32-1)
+        bounded_int(validity, 1, MAX_UIDVALIDITY_MARKER)
+        bounded_int(uid, 1, MAX_IMAP_UID)
         return parts
     except (ValueError, TypeError, UnicodeError, binascii.Error):
         raise ConnectorError("Invalid message id") from None
@@ -245,10 +250,30 @@ class Connector:
 
     def select(self, c, mailbox):
         data = ok(c.select(quote(utf7_encode(mailbox)), readonly=True))
-        count = int(data[0])
+        try:
+            count = int(data[0])
+        except (ValueError, TypeError, IndexError):
+            raise ConnectorError("Invalid message count") from None
+        if not 0 <= count <= MAX_IMAP_UID:
+            raise ConnectorError("Invalid message count")
         response = c.response('UIDVALIDITY')[1]
-        if not response or not response[0] or not response[0].isdigit(): raise ConnectorError("Server omitted UIDVALIDITY")
-        return count, bounded_int(int(response[0]), 1, 2**32-1)
+        if not response or not response[0]: raise ConnectorError("Server omitted UIDVALIDITY")
+        raw_validity = response[0]
+        if isinstance(raw_validity, bytes):
+            try:
+                raw_validity = raw_validity.decode('ascii')
+            except UnicodeDecodeError:
+                raise ConnectorError("Invalid UIDVALIDITY") from None
+        if not isinstance(raw_validity, str) or not re.fullmatch(r'[0-9]{1,19}', raw_validity):
+            raise ConnectorError("Invalid UIDVALIDITY")
+        try:
+            validity = bounded_int(int(raw_validity), 1, MAX_UIDVALIDITY_MARKER)
+        except ConnectorError:
+            raise ConnectorError("Invalid UIDVALIDITY") from None
+        # Keep a wider UIDVALIDITY only as opaque generation metadata for
+        # compatibility. It is never sent as a UID or sequence; those stay
+        # bounded to IMAP's 32-bit domain.
+        return count, validity
 
     def list_folders(self, account):
         with self.connect(account) as c:
@@ -271,6 +296,8 @@ class Connector:
             if value: criteria.extend([field.encode(), quote(value).encode('utf-8')])
         if since:
             try:
+                if not isinstance(since, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', since):
+                    raise ValueError()
                 d=date.fromisoformat(since)
                 months=('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec')
                 criteria.extend([b'SINCE', f'{d.day:02}-{months[d.month-1]}-{d.year:04}'.encode()])
@@ -283,14 +310,22 @@ class Connector:
             for row in rows:
                 if isinstance(row, bytes):
                     match=re.search(rb'\bUID (\d+)\b', row)
-                    if match: uids.append(int(match[1]))
+                    if match:
+                        try:
+                            uids.append(bounded_int(int(match[1]), 1, MAX_IMAP_UID))
+                        except ConnectorError:
+                            raise ConnectorError("Server returned an invalid UID") from None
             if len(uids) > scan_limit: raise ConnectorError("Server exceeded search window")
             if not uids: return {'messages': [], 'scanned_recent': 0, 'scope': 'recent messages only', 'has_older_messages': count > scan_limit}
+            uids=sorted(set(uids))
             uidset=','.join(str(u) for u in uids)
             charset='UTF-8' if any(any(b > 127 for b in item) for item in criteria) else None
             charset_args = ['CHARSET', charset] if charset else []
             found=ok(c.uid('SEARCH', *charset_args, 'UID', uidset, *criteria))
-            matches=[int(x) for x in (found[0] or b'').split()]
+            try:
+                matches=[bounded_int(int(x), 1, MAX_IMAP_UID) for x in (found[0] or b'').split()]
+            except (ConnectorError, ValueError):
+                raise ConnectorError("Server returned an invalid UID search result") from None
             if not set(matches) <= set(uids): raise ConnectorError("Server returned messages outside search scope")
             results=[]
             for uid in sorted(set(matches), reverse=True)[:limit]:

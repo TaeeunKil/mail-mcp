@@ -14,6 +14,8 @@ ATTACH=b'("APPLICATION" "PDF" ("NAME" "secret.pdf") NIL NIL "BASE64" 999 NIL ("A
 class Fake:
     def __init__(self,*args,**kwargs):
         self.calls=[]; self.validity=b'123'; self.large=False
+        self.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
+        self.search_result=b'501 502'
         self.part=PLAIN; self.body=base64.b64encode('안녕'.encode())
         assert kwargs['ssl_context'].verify_mode==ssl.CERT_REQUIRED
         assert kwargs['ssl_context'].check_hostname is True
@@ -26,10 +28,10 @@ class Fake:
     def response(self,name): return name,[self.validity]
     def list(self,*args): return 'OK',[b'(\\HasNoChildren) "/" "INBOX"', ('(\\HasNoChildren) "/" "'+utf7_encode('보관함')+'"').encode()]
     def fetch(self,seq,query):
-        self.calls.append(('FETCH',seq,query)); return 'OK',[b'999 (UID 501)',b'1000 (UID 502)']
+        self.calls.append(('FETCH',seq,query)); return 'OK',self.fetch_rows
     def uid(self,cmd,*args):
         self.calls.append(('UID',cmd,*args))
-        if cmd=='SEARCH': return 'OK',[b'501 502']
+        if cmd=='SEARCH': return 'OK',[self.search_result]
         assert cmd=='FETCH'
         uid, query=args
         if 'BODYSTRUCTURE' in query:
@@ -60,6 +62,43 @@ def test_search_bounded_readonly(setup):
     search=next(x for x in f.calls if x[:2]==('UID','SEARCH'))
     assert search[-1]==b'"hello \\" OR ALL"'
     assert all(x[0] not in ('STORE','EXPUNGE','APPEND','CLOSE') for x in f.calls)
+
+@pytest.mark.parametrize(('scan_limit','sequence_set','rows','search_result'),[
+    (1,'1000:1000',[b'1000 (UID 502)'],b'502'),
+    (10,'991:1000',[b'999 (UID 501)',b'1000 (UID 502)'],b'501 502'),
+])
+def test_search_accepts_wide_uidvalidity_as_opaque_marker(setup,scan_limit,sequence_set,rows,search_result):
+    c,f=setup
+    f.validity=b'4294967296'
+    f.fetch_rows=rows
+    f.search_result=search_result
+
+    result=c.search_messages('naver',mailbox='INBOX',limit=1,scan_limit=scan_limit)
+
+    assert ('FETCH',sequence_set,'(UID)') in f.calls
+    assert len(result['messages'])==1
+    assert decode_id(result['messages'][0]['id'])==['naver','INBOX',4294967296,502]
+    assert c.read_message(result['messages'][0]['id'])['id']==result['messages'][0]['id']
+    assert not any(x[0] in ('STORE','EXPUNGE','APPEND','CLOSE') for x in f.calls)
+
+@pytest.mark.parametrize('validity',[b'0',b'9223372036854775808',b'not-a-number'])
+def test_invalid_uidvalidity_fails_closed(setup,validity):
+    c,f=setup; f.validity=validity
+    with pytest.raises(ConnectorError,match='Invalid UIDVALIDITY'):
+        c.search_messages('naver',limit=1,scan_limit=1)
+    assert not any(x[0] in ('FETCH','UID') for x in f.calls)
+
+@pytest.mark.parametrize(('rows','search_result','error'),[
+    ([b'1000 (UID 0)'],b'0','Server returned an invalid UID'),
+    ([b'1000 (UID 4294967296)'],b'4294967296','Server returned an invalid UID'),
+    ([b'1000 (UID 502)'],b'0','Server returned an invalid UID search result'),
+])
+def test_search_rejects_out_of_range_uid_values(setup,rows,search_result,error):
+    c,f=setup; f.fetch_rows=rows; f.search_result=search_result
+    with pytest.raises(ConnectorError,match=error):
+        c.search_messages('naver',limit=1,scan_limit=1)
+    searched=any(x[:2]==('UID','SEARCH') for x in f.calls)
+    assert searched is (error.endswith('search result'))
 
 def test_read_decodes_skips_attachment(setup):
     c,f=setup
@@ -178,6 +217,19 @@ def test_korean_search_charset(setup):
     call=next(x for x in f.calls if x[:2]==('UID','SEARCH'))
     assert call[2:6]==('CHARSET','UTF-8','UID','501,502')
     assert call[-1]=='"계약"'.encode()
+
+def test_since_uses_imap_date_atom(setup):
+    c,f=setup
+    c.search_messages('naver',since='2024-01-02')
+    call=next(x for x in f.calls if x[:2]==('UID','SEARCH'))
+    assert call[-2:]==(b'SINCE',b'02-Jan-2024')
+
+@pytest.mark.parametrize('since',['20240102','2024-1-2','2024-02-30'])
+def test_since_rejects_non_iso_or_invalid_dates(setup,since):
+    c,f=setup
+    with pytest.raises(ConnectorError,match='since must be YYYY-MM-DD'):
+        c.search_messages('naver',since=since)
+    assert not f.calls
 
 def test_bad_bodystructure_safe_error(setup):
     c,f=setup
