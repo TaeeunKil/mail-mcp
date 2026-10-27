@@ -9,7 +9,7 @@
 - 원격 기본 모드는 `diagnostic`이며 정적 `service_status` 하나만 공개합니다. 메일 환경변수는 이 모드에서 읽지 않습니다.
 - `MAIL_MCP_MODE=token`을 명시했을 때만 Bearer 인증 뒤 메일 도구를 등록합니다. 토큰 또는 네이버 설정이 누락/잘못되면 `/mcp`는 503으로 fail closed합니다. 모든 MCP 요청은 `Authorization: Bearer …` 인증을 먼저 통과해야 합니다.
 - Bearer 방식은 데스크톱 Codex용이며 ChatGPT 웹/cloud dot에는 OAuth 모드가 필요합니다. Supabase public PKCE OAuth client는 등록됐고 DCR은 꺼져 있습니다. 사용자가 Vercel OAuth 설정과 owner/client 제한 Hook을 구성했으며, end-to-end 로그인 확인은 진행 중입니다.
-- Production에는 Naver IMAP 자격증명이 없습니다. 현재 배포된 코드는 OAuth와 IMAP 준비 상태를 함께 확인해 `/mcp`에 503을 반환합니다. 이 변경은 이를 분리해 인증 challenge와 비민감 상태 확인을 허용하되, 메일 도구는 IMAP 자격증명이 생길 때까지 등록하지 않습니다.
+- Production에는 Naver IMAP 자격증명이 없습니다. 배포된 코드는 무인증 `/mcp` 요청에 401 OAuth challenge를 반환하며, 인증 후에는 비민감 `service_status`만 제공합니다. 실제 OAuth 로그인은 아직 확인 중이고, Naver 자격증명이 추가되기 전까지 메일 도구는 등록되지 않습니다.
 
 [데스크톱 Codex/Vercel 설정 안내](VERCEL.md), [네이버 로컬 첫 연결 안내](NAVER_SETUP.md), [보안 안내](SECURITY.md)를 확인하세요.
 

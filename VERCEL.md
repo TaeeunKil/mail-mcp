@@ -75,7 +75,7 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 - Supabase Site URL은 `https://mail-mcp-beta.vercel.app`, Authorization Path는 `/oauth/consent`로 확인했습니다. 이 조합의 동의 화면 경로는 `https://mail-mcp-beta.vercel.app/oauth/consent`입니다.
 - ChatGPT가 보여준 등록 callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. Supabase OAuth Apps에 정확히 일치하는 URI로 등록해야 합니다. 와일드카드는 사용하지 않습니다.
 - Dynamic Client Registration은 OFF입니다. 공개 PKCE client는 생성됐고 ChatGPT callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. client 식별자는 Vercel의 `MAIL_MCP_OAUTH_CLIENT_ID`에 설정해야 하며 소스에 저장하지 않습니다. 전체 OAuth 흐름은 아직 검증하지 않았습니다.
-- 이전 배포 확인에서는 OAuth 설정이 없었습니다. 이후 사용자가 Vercel OAuth 환경변수와 owner/client 제한 Hook을 구성하고 재배포했다고 확인했습니다. Naver IMAP 자격증명은 의도적으로 설정하지 않았습니다. 현재 배포 코드는 IMAP 설정이 없으면 `/mcp`에 503을 반환하며, 이 문서의 로컬 변경은 인증 준비 상태와 메일 준비 상태를 분리합니다. 브라우저에서 OAuth 연결 시작을 확인 중입니다.
+- 이전 배포 확인에서는 OAuth 설정이 없었습니다. 이후 사용자가 Vercel OAuth 환경변수와 owner/client 제한 Hook을 구성하고 재배포했다고 확인했습니다. 이 변경도 Production에 배포됐으며, 무인증 `/mcp` initialize 요청에서 401과 보호 리소스 metadata challenge가 실제로 확인됐습니다. Naver IMAP 자격증명은 의도적으로 설정하지 않았습니다. 인증 후에는 코드와 CI가 비민감 `service_status`만 노출하도록 검증했으며, 실제 OAuth 로그인은 브라우저에서 계속 확인 중입니다.
 
 ### 로그인과 동의 흐름
 
