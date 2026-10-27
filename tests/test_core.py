@@ -17,6 +17,7 @@ class Fake:
         self.calls=[]; self.validity_data=[b'123']; self.large=False
         self.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
         self.search_result=b'501 502'
+        self.headers={501:HEADER,502:HEADER}
         self.part=PLAIN; self.body=base64.b64encode('안녕'.encode())
         assert kwargs['ssl_context'].verify_mode==ssl.CERT_REQUIRED
         assert kwargs['ssl_context'].check_hostname is True
@@ -39,7 +40,7 @@ class Fake:
             part=self.part.replace(b'12 1',b'999999 1') if self.large else self.part
             return 'OK',[b'1000 (UID '+uid.encode()+b' RFC822.SIZE 10000 BODYSTRUCTURE ('+part+b' '+ATTACH+b' "MIXED" NIL NIL))']
         assert 'BODY.PEEK' in query
-        if '[HEADER]' in query: return 'OK',[(b'header',HEADER)]
+        if '[HEADER]' in query: return 'OK',[(b'header',self.headers.get(int(uid),HEADER))]
         assert '[1]' in query  # attachment section 2 must NEVER be fetched
         return 'OK',[(b'body',self.body)]
 
@@ -57,7 +58,7 @@ def test_accounts_no_secrets(setup):
 def test_search_bounded_readonly(setup):
     c,f=setup
     result=c.search_messages('naver',text='hello " OR ALL',scan_limit=50)
-    assert result['messages'][0]['headers']['Subject']=='테스트'
+    assert result['messages'][0]['headers']['Subject']=='\uD14C\uC2A4\uD2B8'
     assert result['has_older_messages'] is True
     assert ('FETCH','951:1000','(UID)') in f.calls
     search=next(x for x in f.calls if x[:2]==('UID','SEARCH'))
@@ -93,7 +94,6 @@ def test_wide_uidvalidity_returns_only_safe_diagnostic(setup):
     assert not any(x[0] in ('FETCH','UID') for x in f.calls)
 
 @pytest.mark.parametrize(('validity_data','category','response_type','raw_number'),[
-    ([b'0'],'zero','bytes','0'),
     ([None],'missing','none',None),
     (None,'missing','none',None),
     ([],'missing','sequence',None),
@@ -112,16 +112,51 @@ def test_uidvalidity_diagnostic_classifies_without_echoing_raw_data(setup,validi
     assert 'not-a-secret' not in repr(result)
     assert not any(x[0] in ('FETCH','UID') for x in f.calls)
 
-def test_read_fails_closed_before_uid_fetch_when_uidvalidity_is_zero(setup):
-    c,f=setup; f.validity_data=[b'0']
-    result=safe(lambda: c.read_message(make_id('naver','INBOX',123,502)))
-    assert result=={
-        'error':'invalid_uidvalidity',
-        'category':'zero',
-        'response_type':'bytes',
-        'raw_number':'0',
+def test_zero_uidvalidity_returns_same_session_headers_without_readable_ids(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    result=c.search_messages('naver',limit=1,scan_limit=1)
+    assert result['read_mode']=='headers_only_uidvalidity_zero'
+    assert result['messages'][0]['id'] is None
+    assert result['messages'][0]['body_readable'] is False
+    assert result['messages'][0]['headers']['Subject']=='\uD14C\uC2A4\uD2B8'
+    assert ('FETCH','1000:1000','(UID)') in f.calls
+    assert any(x[:2]==('UID','SEARCH') for x in f.calls)
+    assert any(x[:2]==('UID','FETCH') and 'BODY.PEEK[HEADER]' in x[3] for x in f.calls)
+    assert not any(x[:2]==('UID','FETCH') and 'BODYSTRUCTURE' in x[3] for x in f.calls)
+
+def test_zero_uidvalidity_never_issues_readable_id_for_duplicate_message_ids(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
+    f.search_result=b'501 502'
+    f.headers={
+        501:b'Message-ID: <duplicate@example.invalid>\r\nSubject: first\r\n\r\n',
+        502:b'Message-ID: <duplicate@example.invalid>\r\nSubject: second\r\n\r\n',
     }
+    result=c.search_messages('naver',limit=2,scan_limit=10)
+    assert [m['headers']['Message-ID'] for m in result['messages']]==[
+        '<duplicate@example.invalid>','<duplicate@example.invalid>'
+    ]
+    assert all(m['id'] is None and m['body_readable'] is False for m in result['messages'])
+
+def test_missing_message_id_under_zero_uidvalidity_stays_headers_only(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    f.headers[502]=b'Subject: no stable id\r\n\r\n'
+    result=c.search_messages('naver',limit=1,scan_limit=1)
+    assert result['messages'][0]['headers']['Message-ID']==''
+    assert result['messages'][0]['id'] is None
+    assert result['messages'][0]['body_readable'] is False
+
+def test_stale_and_legacy_ids_cannot_read_when_uidvalidity_is_zero(setup):
+    c,f=setup; f.validity_data=[b'0']
+    stale=make_id('naver','INBOX',123,502)
+    result=safe(lambda: c.read_message(stale))
+    assert result=={'error':'UIDVALIDITY is zero; cross-session body reads are disabled'}
     assert not any(x[:2]==('UID','FETCH') for x in f.calls)
+
+    f.calls.clear()
+    legacy_zero=make_id('naver','INBOX',0,502)
+    result=safe(lambda: c.read_message(legacy_zero))
+    assert result=={'error':'Invalid message id'}
+    assert f.calls==[]
 
 @pytest.mark.parametrize(('rows','search_result','error'),[
     ([b'1000 (UID 0)'],b'0','Server returned an invalid UID'),
@@ -171,7 +206,7 @@ def test_validation(setup,field,value):
     c,f=setup
     with pytest.raises(ConnectorError): c.search_messages('naver',**{field:value})
 
-@pytest.mark.parametrize('value',['???','e30',make_id('naver','INBOX',0,1),make_id('naver','INBOX',1,'1:*')])
+@pytest.mark.parametrize('value',['???','e30',make_id('naver','INBOX',0,1),make_id('naver','INBOX',4294967296,1),make_id('naver','INBOX',1,'1:*')])
 def test_invalid_id(value):
     with pytest.raises(ConnectorError): decode_id(value)
 

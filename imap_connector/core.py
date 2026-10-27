@@ -330,7 +330,10 @@ class Connector:
         if re.fullmatch(r'[0-9]{1,20}', raw_validity):
             validity = int(raw_validity)
             if validity == 0:
-                raise UIDValidityDiagnosticError("zero", response_type, 0)
+                # Naver can return zero. Treat it as an unstable mailbox
+                # marker: search may return headers from this session, but
+                # no cross-session message ID may be issued from it.
+                return count, 0
             if validity > MAX_IMAP_UID:
                 raise UIDValidityDiagnosticError("out_of_range", response_type, validity)
         elif re.fullmatch(r'-[0-9]{1,19}', raw_validity):
@@ -370,7 +373,8 @@ class Connector:
             except (ValueError, TypeError): raise ConnectorError("since must be YYYY-MM-DD") from None
         with self.connect(account) as c:
             count, validity = self.select(c, mailbox)
-            if not count: return {'messages': [], 'scanned_recent': 0, 'scope': 'recent messages only', 'has_older_messages': False}
+            read_mode = 'headers_only_uidvalidity_zero' if validity == 0 else 'search_and_read'
+            if not count: return {'messages': [], 'scanned_recent': 0, 'scope': 'recent messages only', 'has_older_messages': False, 'read_mode': read_mode}
             rows = ok(c.fetch(f'{max(1,count-scan_limit+1)}:{count}', '(UID)'))
             uids=[]
             for row in rows:
@@ -382,7 +386,7 @@ class Connector:
                         except ConnectorError:
                             raise ConnectorError("Server returned an invalid UID") from None
             if len(uids) > scan_limit: raise ConnectorError("Server exceeded search window")
-            if not uids: return {'messages': [], 'scanned_recent': 0, 'scope': 'recent messages only', 'has_older_messages': count > scan_limit}
+            if not uids: return {'messages': [], 'scanned_recent': 0, 'scope': 'recent messages only', 'has_older_messages': count > scan_limit, 'read_mode': read_mode}
             uids=sorted(set(uids))
             uidset=','.join(str(u) for u in uids)
             charset='UTF-8' if any(any(b > 127 for b in item) for item in criteria) else None
@@ -396,14 +400,18 @@ class Connector:
             results=[]
             for uid in sorted(set(matches), reverse=True)[:limit]:
                 raw=literal(ok(c.uid('FETCH', str(uid), '(BODY.PEEK[HEADER]<0.16384>)')), 16384)
-                results.append({'id': make_id(account, mailbox, validity, uid), 'headers': header_dict(raw), 'headers_may_be_truncated': len(raw) == 16384})
-            return {'messages': results, 'scanned_recent': len(uids), 'scope': 'recent messages only, newest UID first', 'has_older_messages': count > scan_limit, 'more_matches_in_window': len(matches) > limit}
+                message = {'id': None if validity == 0 else make_id(account, mailbox, validity, uid), 'headers': header_dict(raw), 'headers_may_be_truncated': len(raw) == 16384}
+                if validity == 0:
+                    message.update(body_readable=False, body_readability_reason='UIDVALIDITY is zero; cross-session body reads are disabled.')
+                results.append(message)
+            return {'messages': results, 'scanned_recent': len(uids), 'scope': 'recent messages only, newest UID first', 'has_older_messages': count > scan_limit, 'more_matches_in_window': len(matches) > limit, 'read_mode': read_mode}
 
     def read_message(self, message_id, max_chars=12000):
         bounded_int(max_chars, 1, 30000)
         account, mailbox, validity, uid=decode_id(message_id)
         with self.connect(account) as c:
             _, current=self.select(c, mailbox)
+            if current == 0: raise ConnectorError("UIDVALIDITY is zero; cross-session body reads are disabled")
             if validity != current: raise ConnectorError("Mailbox UIDVALIDITY changed; search again")
             rows=ok(c.uid('FETCH', str(uid), '(UID RFC822.SIZE BODYSTRUCTURE)'))
             if not rows or not isinstance(rows[0], bytes): raise ConnectorError("Message missing or unsupported BODYSTRUCTURE")
