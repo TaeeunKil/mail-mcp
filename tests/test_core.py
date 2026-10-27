@@ -5,6 +5,7 @@ import ssl
 import pytest
 from imap_connector.core import (Connector, ConnectorError, BoundedIMAP, load_accounts,
     make_id, decode_id, parse_imap, utf7_encode, utf7_decode, text_parts)
+from imap_connector.server import safe
 
 ACCOUNTS={'naver':{'host':'imap.naver.com','port':993,'username_env':'TEST_USER','password_env':'TEST_PASS'}}
 HEADER=b'Subject: =?utf-8?b?7YWM7Iqk7Yq4?=\r\nFrom: sender@example.invalid\r\n\r\n'
@@ -13,7 +14,7 @@ ATTACH=b'("APPLICATION" "PDF" ("NAME" "secret.pdf") NIL NIL "BASE64" 999 NIL ("A
 
 class Fake:
     def __init__(self,*args,**kwargs):
-        self.calls=[]; self.validity=b'123'; self.large=False
+        self.calls=[]; self.validity_data=[b'123']; self.large=False
         self.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
         self.search_result=b'501 502'
         self.part=PLAIN; self.body=base64.b64encode('안녕'.encode())
@@ -25,7 +26,7 @@ class Fake:
     def select(self,box,readonly=False):
         assert readonly is True
         self.calls.append(('EXAMINE',box)); return 'OK',[b'1000']
-    def response(self,name): return name,[self.validity]
+    def response(self,name): return name,self.validity_data
     def list(self,*args): return 'OK',[b'(\\HasNoChildren) "/" "INBOX"', ('(\\HasNoChildren) "/" "'+utf7_encode('보관함')+'"').encode()]
     def fetch(self,seq,query):
         self.calls.append(('FETCH',seq,query)); return 'OK',self.fetch_rows
@@ -67,9 +68,8 @@ def test_search_bounded_readonly(setup):
     (1,'1000:1000',[b'1000 (UID 502)'],b'502'),
     (10,'991:1000',[b'999 (UID 501)',b'1000 (UID 502)'],b'501 502'),
 ])
-def test_search_accepts_wide_uidvalidity_as_opaque_marker(setup,scan_limit,sequence_set,rows,search_result):
+def test_search_uses_valid_bounded_sequence_ranges(setup,scan_limit,sequence_set,rows,search_result):
     c,f=setup
-    f.validity=b'4294967296'
     f.fetch_rows=rows
     f.search_result=search_result
 
@@ -77,16 +77,51 @@ def test_search_accepts_wide_uidvalidity_as_opaque_marker(setup,scan_limit,seque
 
     assert ('FETCH',sequence_set,'(UID)') in f.calls
     assert len(result['messages'])==1
-    assert decode_id(result['messages'][0]['id'])==['naver','INBOX',4294967296,502]
+    assert decode_id(result['messages'][0]['id'])==['naver','INBOX',123,502]
     assert c.read_message(result['messages'][0]['id'])['id']==result['messages'][0]['id']
     assert not any(x[0] in ('STORE','EXPUNGE','APPEND','CLOSE') for x in f.calls)
 
-@pytest.mark.parametrize('validity',[b'0',b'9223372036854775808',b'not-a-number'])
-def test_invalid_uidvalidity_fails_closed(setup,validity):
-    c,f=setup; f.validity=validity
-    with pytest.raises(ConnectorError,match='Invalid UIDVALIDITY'):
-        c.search_messages('naver',limit=1,scan_limit=1)
+def test_wide_uidvalidity_returns_only_safe_diagnostic(setup):
+    c,f=setup; f.validity_data=[b'4294967296']
+    result=safe(lambda: c.search_messages('naver',limit=1,scan_limit=1))
+    assert result=={
+        'error':'invalid_uidvalidity',
+        'category':'out_of_range',
+        'response_type':'bytes',
+        'raw_number':'4294967296',
+    }
     assert not any(x[0] in ('FETCH','UID') for x in f.calls)
+
+@pytest.mark.parametrize(('validity_data','category','response_type','raw_number'),[
+    ([b'0'],'zero','bytes','0'),
+    ([None],'missing','none',None),
+    (None,'missing','none',None),
+    ([],'missing','sequence',None),
+    ([b'not-a-secret'],'non_decimal','bytes',None),
+    ([bytes([255])],'non_ascii','bytes',None),
+    ([123],'unexpected_type','int','123'),
+    ([[b'123']],'unexpected_type','sequence',None),
+])
+def test_uidvalidity_diagnostic_classifies_without_echoing_raw_data(setup,validity_data,category,response_type,raw_number):
+    c,f=setup; f.validity_data=validity_data
+    result=safe(lambda: c.search_messages('naver',limit=1,scan_limit=1))
+    assert result['error']=='invalid_uidvalidity'
+    assert result['category']==category
+    assert result['response_type']==response_type
+    assert result.get('raw_number')==raw_number
+    assert 'not-a-secret' not in repr(result)
+    assert not any(x[0] in ('FETCH','UID') for x in f.calls)
+
+def test_read_fails_closed_before_uid_fetch_when_uidvalidity_is_zero(setup):
+    c,f=setup; f.validity_data=[b'0']
+    result=safe(lambda: c.read_message(make_id('naver','INBOX',123,502)))
+    assert result=={
+        'error':'invalid_uidvalidity',
+        'category':'zero',
+        'response_type':'bytes',
+        'raw_number':'0',
+    }
+    assert not any(x[:2]==('UID','FETCH') for x in f.calls)
 
 @pytest.mark.parametrize(('rows','search_result','error'),[
     ([b'1000 (UID 0)'],b'0','Server returned an invalid UID'),

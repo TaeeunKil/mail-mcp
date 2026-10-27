@@ -19,7 +19,40 @@ class ConnectorError(ValueError):
 
 
 MAX_IMAP_UID = 2**32 - 1
-MAX_UIDVALIDITY_MARKER = 2**63 - 1
+
+
+class UIDValidityDiagnosticError(ConnectorError):
+    """Fail-closed UIDVALIDITY error with a bounded, secret-free diagnostic."""
+
+    def __init__(self, category, response_type, raw_number=None):
+        self.category = category
+        self.response_type = response_type
+        self.raw_number = str(raw_number) if type(raw_number) is int else None
+        super().__init__("Invalid UIDVALIDITY")
+
+    def as_tool_result(self):
+        result = {
+            "error": "invalid_uidvalidity",
+            "category": self.category,
+            "response_type": self.response_type,
+        }
+        if self.raw_number is not None:
+            result["raw_number"] = self.raw_number
+        return result
+
+
+def uidvalidity_response_type(value):
+    if value is None:
+        return "none"
+    if isinstance(value, bytes):
+        return "bytes"
+    if isinstance(value, str):
+        return "str"
+    if type(value) is int:
+        return "int"
+    if isinstance(value, (list, tuple)):
+        return "sequence"
+    return "other"
 
 
 def bounded_int(value, low, high):
@@ -184,7 +217,7 @@ def decode_id(value):
         if not isinstance(parts, list) or len(parts) != 4: raise ValueError()
         account, mailbox, validity, uid = parts
         clean(account, 40); clean(mailbox)
-        bounded_int(validity, 1, MAX_UIDVALIDITY_MARKER)
+        bounded_int(validity, 1, MAX_IMAP_UID)
         bounded_int(uid, 1, MAX_IMAP_UID)
         return parts
     except (ValueError, TypeError, UnicodeError, binascii.Error):
@@ -256,23 +289,56 @@ class Connector:
             raise ConnectorError("Invalid message count") from None
         if not 0 <= count <= MAX_IMAP_UID:
             raise ConnectorError("Invalid message count")
-        response = c.response('UIDVALIDITY')[1]
-        if not response or not response[0]: raise ConnectorError("Server omitted UIDVALIDITY")
-        raw_validity = response[0]
-        if isinstance(raw_validity, bytes):
+        response = c.response('UIDVALIDITY')
+        if not isinstance(response, tuple) or len(response) != 2:
+            raise UIDValidityDiagnosticError("invalid_response_shape", uidvalidity_response_type(response))
+        code, values = response
+        if code != 'UIDVALIDITY':
+            raise UIDValidityDiagnosticError("unexpected_response_code", uidvalidity_response_type(code))
+        if values is None:
+            raise UIDValidityDiagnosticError("missing", "none")
+        if not isinstance(values, (list, tuple)):
+            raise UIDValidityDiagnosticError("invalid_response_data", uidvalidity_response_type(values))
+        if not values:
+            raise UIDValidityDiagnosticError("missing", "sequence")
+        if len(values) != 1:
+            raise UIDValidityDiagnosticError("multiple_values", "sequence")
+
+        raw = values[0]
+        response_type = uidvalidity_response_type(raw)
+        if raw is None:
+            raise UIDValidityDiagnosticError("missing", response_type)
+        if isinstance(raw, bytes):
             try:
-                raw_validity = raw_validity.decode('ascii')
+                raw_validity = raw.decode('ascii')
             except UnicodeDecodeError:
-                raise ConnectorError("Invalid UIDVALIDITY") from None
-        if not isinstance(raw_validity, str) or not re.fullmatch(r'[0-9]{1,19}', raw_validity):
-            raise ConnectorError("Invalid UIDVALIDITY")
-        try:
-            validity = bounded_int(int(raw_validity), 1, MAX_UIDVALIDITY_MARKER)
-        except ConnectorError:
-            raise ConnectorError("Invalid UIDVALIDITY") from None
-        # Keep a wider UIDVALIDITY only as opaque generation metadata for
-        # compatibility. It is never sent as a UID or sequence; those stay
-        # bounded to IMAP's 32-bit domain.
+                raise UIDValidityDiagnosticError("non_ascii", response_type) from None
+        elif isinstance(raw, str):
+            raw_validity = raw
+        elif type(raw) is int:
+            if raw == 0:
+                category = "zero"
+            elif 1 <= raw <= MAX_IMAP_UID:
+                category = "unexpected_type"
+            else:
+                category = "out_of_range"
+            raw_number = raw if len(str(abs(raw))) <= 20 else None
+            raise UIDValidityDiagnosticError(category, response_type, raw_number)
+        else:
+            raise UIDValidityDiagnosticError("unexpected_type", response_type)
+
+        if re.fullmatch(r'[0-9]{1,20}', raw_validity):
+            validity = int(raw_validity)
+            if validity == 0:
+                raise UIDValidityDiagnosticError("zero", response_type, 0)
+            if validity > MAX_IMAP_UID:
+                raise UIDValidityDiagnosticError("out_of_range", response_type, validity)
+        elif re.fullmatch(r'-[0-9]{1,19}', raw_validity):
+            raise UIDValidityDiagnosticError("out_of_range", response_type, int(raw_validity))
+        elif re.fullmatch(r'[0-9]{21,}', raw_validity):
+            raise UIDValidityDiagnosticError("number_too_long", response_type)
+        else:
+            raise UIDValidityDiagnosticError("non_decimal", response_type)
         return count, validity
 
     def list_folders(self, account):

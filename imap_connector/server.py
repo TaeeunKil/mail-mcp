@@ -2,7 +2,7 @@
 import os
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
-from .core import Connector, ConnectorError, load_accounts
+from .core import Connector, ConnectorError, UIDValidityDiagnosticError, load_accounts
 
 mcp = MCPServer('Read-only IMAP prototype')
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
@@ -15,6 +15,8 @@ def connector():
 def safe(operation, *args, **kwargs):
     try:
         return operation(*args, **kwargs)
+    except UIDValidityDiagnosticError as exc:
+        return exc.as_tool_result()
     except ConnectorError as exc:
         return {'error': str(exc)}
 
