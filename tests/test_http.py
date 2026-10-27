@@ -234,6 +234,7 @@ def test_owner_session_check_is_separate_from_mcp_resource_auth(monkeypatch):
     from types import SimpleNamespace
 
     from imap_connector.http_server import OAuthGate
+    from imap_connector.oauth_auth import OwnerSessionVerification
 
     base_env = {
         "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co",
@@ -247,15 +248,15 @@ def test_owner_session_check_is_separate_from_mcp_resource_auth(monkeypatch):
 
     async def verify_session(token):
         if token == "synthetic-owner-session":
-            return True
+            return OwnerSessionVerification(owner=True, reason="ok")
         if token == "synthetic-other-user-session":
-            return False
-        return None
+            return OwnerSessionVerification(owner=False, reason="owner_mismatch")
+        return OwnerSessionVerification(owner=None, reason="issuer_mismatch")
 
     async def verify_mcp_token(token):
         return SimpleNamespace(subject="synthetic-owner") if token == "synthetic-resource-token" else None
 
-    monkeypatch.setattr(oauth_app.verifier, "verify_owner_session", verify_session)
+    monkeypatch.setattr(oauth_app.verifier, "verify_owner_session_detailed", verify_session)
     monkeypatch.setattr(oauth_app.verifier, "verify_mcp_token_async", verify_mcp_token)
 
     with TestClient(oauth_app) as oauth_client:
@@ -278,7 +279,8 @@ def test_owner_session_check_is_separate_from_mcp_resource_auth(monkeypatch):
             headers={"Authorization": "Bearer synthetic-invalid-session"},
         )
         assert invalid.status_code == 401
-        assert invalid.json() == {"error": "invalid_session"}
+        assert invalid.json() == {"error": "invalid_session", "reason": "issuer_mismatch"}
+        assert "synthetic-invalid-session" not in invalid.text
 
         session_to_mcp = rpc(
             oauth_client,
@@ -292,6 +294,7 @@ def test_owner_session_check_is_separate_from_mcp_resource_auth(monkeypatch):
             headers={"Authorization": "Bearer synthetic-owner-session"},
         )
         assert session_to_mcp.status_code == 401
+        assert "issuer_mismatch" not in session_to_mcp.text
 
         resource_to_mcp = rpc(
             oauth_client,

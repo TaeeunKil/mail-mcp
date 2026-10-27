@@ -459,10 +459,14 @@ def create_http_app(environ: Mapping[str, str] | None = None):
         token = _authorization_bearer(request)
         if token is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401, headers=headers)
-        owner_match = await oauth_verifier.verify_owner_session(token)
-        if owner_match is None:
-            return JSONResponse({"error": "invalid_session"}, status_code=401, headers=headers)
-        if not owner_match:
+        outcome = await oauth_verifier.verify_owner_session_detailed(token)
+        if outcome.owner is None:
+            return JSONResponse(
+                {"error": "invalid_session", "reason": outcome.reason},
+                status_code=401,
+                headers=headers,
+            )
+        if not outcome.owner:
             return JSONResponse({"owner": False}, status_code=403, headers=headers)
         return JSONResponse({"owner": True}, headers=headers)
 

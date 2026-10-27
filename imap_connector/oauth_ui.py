@@ -88,6 +88,26 @@ const signedIn = document.querySelector('#signed-in');
 const requestBox = document.querySelector('#request');
 const authId = new URL(location.href).searchParams.get('authorization_id');
 const authIdPattern = /^[A-Za-z0-9._~-]{1,256}$/;
+const SESSION_REASON_MESSAGES = Object.freeze({
+  malformed_token: '\ub85c\uadf8\uc778 \uc138\uc158 \ud1a0\ud070 \ud615\uc2dd\uc774 \uc62c\ubc14\ub974\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  unsupported_algorithm: '\ub85c\uadf8\uc778 \ud1a0\ud070\uc758 \uc11c\uba85 \uc54c\uace0\ub9ac\uc998\uc774 \ud5c8\uc6a9 \ubaa9\ub85d\uacfc \ub9de\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  invalid_key_id: '\ub85c\uadf8\uc778 \ud1a0\ud070\uc5d0 \uc11c\uba85 \ud0a4 ID\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.',
+  jwks_unavailable: 'Supabase JWKS \uacf5\uac1c \ud0a4 \uc11c\ubc84\uc5d0 \uc5f0\uacb0\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.',
+  jwks_invalid: 'Supabase JWKS \uc751\ub2f5\uc774 \uc62c\ubc14\ub974\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  signing_key_not_found: 'Supabase JWKS\uc5d0 \ud1a0\ud070\uc758 \uc11c\uba85 \ud0a4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.',
+  key_algorithm_mismatch: 'JWT \ud5e4\ub354\uc758 \uc54c\uace0\ub9ac\uc998\uacfc Supabase \uc11c\uba85 \ud0a4 \uc54c\uace0\ub9ac\uc998\uc774 \ub2e4\ub985\ub2c8\ub2e4.',
+  invalid_signature: 'JWT \uc11c\uba85\uc774 Supabase \uacf5\uac1c \ud0a4\uc640 \uc77c\uce58\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  issuer_mismatch: 'JWT issuer\uac00 \uc124\uc815\ud55c Supabase issuer\uc640 \uc77c\uce58\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  audience_mismatch: 'JWT audience\uac00 authenticated\uc640 \uc77c\uce58\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  expired: '\ub85c\uadf8\uc778 \uc138\uc158 \ud1a0\ud070\uc774 \ub9cc\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4.',
+  not_yet_valid: '\ub85c\uadf8\uc778 \uc138\uc158 \ud1a0\ud070\uc774 \uc544\uc9c1 \uc720\ud6a8\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  issued_at_invalid: 'JWT iat \uac12\uc774 \uc62c\ubc14\ub974\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  missing_claim: '\ub85c\uadf8\uc778 \uc138\uc158\uc5d0 \ud544\uc218 claim\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.',
+  invalid_subject: '\ub85c\uadf8\uc778 \uc138\uc158 subject\uac00 \uc62c\ubc14\ub974\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+  invalid_claims: '\ub85c\uadf8\uc778 \uc138\uc158 claim \ud615\uc2dd\uc744 \ud655\uc778\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.',
+  verification_unavailable: '\uc778\uc99d \uac80\uc99d \uc11c\ube44\uc2a4\uac00 \uc77c\uc2dc\uc801\uc73c\ub85c \uc751\ub2f5\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.',
+});
+const SAFE_SESSION_REASONS = new Set(Object.keys(SESSION_REASON_MESSAGES));
 let supabase;
 let details;
 
@@ -140,13 +160,24 @@ try {
         credentials: 'omit',
       });
     } catch {
-      return undefined;
+      return { kind: 'unavailable' };
     }
-    if (response.status === 401) return null;
-    if (response.status === 403) return false;
-    if (!response.ok) return undefined;
-    const body = await response.json();
-    return body.owner === true ? true : undefined;
+    if (response.status === 401) {
+      let body = {};
+      try { body = await response.json(); } catch {}
+      const reason = SAFE_SESSION_REASONS.has(body?.reason)
+        ? body.reason
+        : 'verification_unavailable';
+      return { kind: 'invalid', reason };
+    }
+    if (response.status === 403) return { kind: 'non_owner' };
+    if (!response.ok) return { kind: 'unavailable' };
+    try {
+      const body = await response.json();
+      return body.owner === true ? { kind: 'owner' } : { kind: 'unavailable' };
+    } catch {
+      return { kind: 'unavailable' };
+    }
   }
 
   async function loadAuthorization() {
@@ -165,41 +196,75 @@ try {
     setMessage('요청한 앱과 계정 정보 범위를 확인한 뒤 승인하거나 거부하세요.');
   }
 
-  async function showSession() {
-    const { data: { session } } = await supabase.auth.getSession();
+  async function showSession({ loginJustSucceeded = false } = {}) {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const session = sessionData?.session;
+    if (sessionError) {
+      loginForm.hidden = loginJustSucceeded;
+      signedIn.hidden = !loginJustSucceeded;
+      requestBox.hidden = true;
+      setMessage(loginJustSucceeded
+        ? 'Supabase \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc \ub85c\uadf8\uc778 \uc138\uc158\uc744 \ud655\uc778\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.'
+        : '\uc800\uc7a5\ub41c Supabase \uc138\uc158\uc744 \ud655\uc778\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \uc138\uc158 \ud655\uc778 \uc694\uccad\uc5d0 \ubb38\uc81c\uac00 \uc788\uc2b5\ub2c8\ub2e4.');
+      return;
+    }
     if (!session) {
+      if (loginJustSucceeded) {
+        loginForm.hidden = true;
+        signedIn.hidden = false;
+        requestBox.hidden = true;
+        setMessage('\uc81c\ucd9c\ud55c Supabase \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc \uc0ac\uc6a9\ud560 \uc138\uc158\uc744 \ud655\uc778\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.');
+        return;
+      }
       loginForm.hidden = false;
       signedIn.hidden = true;
       return;
     }
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) {
+      if (loginJustSucceeded) {
+        loginForm.hidden = true;
+        signedIn.hidden = false;
+        requestBox.hidden = true;
+        setMessage('\uc81c\ucd9c\ud55c Supabase \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc \uc774 \uc774\ud6c4\uc758 \uacc4\uc815 \uc138\uc158 \ud655\uc778\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4.');
+        return;
+      }
       await supabase.auth.signOut();
       loginForm.hidden = false;
       signedIn.hidden = true;
+      setMessage('\uc800\uc7a5\ub41c Supabase \uc138\uc158\uc744 \ud655\uc778\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \uc0c8 \ub85c\uadf8\uc778\uc774 \ud544\uc694\ud55c\uc9c0 \ud655\uc778\ud558\uc138\uc694.');
       return;
     }
     const ownerCheck = await checkOwner(session);
-    if (ownerCheck === null || ownerCheck === undefined) {
+    if (ownerCheck.kind === 'invalid') {
       loginForm.hidden = true;
       signedIn.hidden = false;
       requestBox.hidden = true;
-      setMessage(ownerCheck === null
-        ? 'Supabase 로그인 세션을 검증하지 못했습니다. 세션 설정을 확인해 주세요.'
-        : '계정 소유자 확인 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.');
+      setMessage(`Supabase \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc MCP \uc11c\ubc84\uc758 \ubcc4\ub3c4 \uc138\uc158 \uac80\uc99d\uc5d0\uc11c \uac70\ubd80\ub410\uc2b5\ub2c8\ub2e4. ${SESSION_REASON_MESSAGES[ownerCheck.reason]} \uc9c4\ub2e8 \ucf54\ub4dc: ${ownerCheck.reason}`);
       return;
     }
-    if (ownerCheck === false) {
+    if (ownerCheck.kind === 'unavailable') {
       loginForm.hidden = true;
       signedIn.hidden = false;
       requestBox.hidden = true;
-      setMessage('이 Supabase 계정은 메일 MCP의 소유자로 등록되지 않았습니다.');
+      setMessage('\uc0ac\uc6a9\uc790 \uc138\uc158\uc740 Supabase\uc5d0\uc11c \ud655\uc778\ub410\uc9c0\ub9cc MCP \uc11c\ubc84\uc758 \uc138\uc158 \ud655\uc778 \uc694\uccad\uc740 \uc644\ub8cc\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4. \uc77c\uc2dc\uc801 \uc11c\ubc84 \uc751\ub2f5 \uc0c1\ud0dc\ub97c \ud655\uc778\ud558\uc138\uc694.');
+      return;
+    }
+    if (ownerCheck.kind === 'non_owner') {
+      loginForm.hidden = true;
+      signedIn.hidden = false;
+      requestBox.hidden = true;
+      setMessage('\uc774 Supabase \uacc4\uc815\uc740 \uba54\uc77c MCP\uc758 \uc18c\uc720\uc790\ub85c \ub4f1\ub85d\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.');
       return;
     }
     loginForm.hidden = true;
     signedIn.hidden = false;
     setMessage('');
-    await loadAuthorization();
+    try {
+      await loadAuthorization();
+    } catch {
+      setMessage('\uc138\uc158\uacfc \uc18c\uc720\uc790 \ud655\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc OAuth \uc2b9\uc778 \uc694\uccad \uc815\ubcf4\ub97c \ubd88\ub7ec\uc624\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.');
+    }
   }
 
   loginForm.addEventListener('submit', async (event) => {
@@ -210,13 +275,28 @@ try {
     const password = passwordField.value;
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      passwordField.value = '';
       if (error) throw new Error('login_failed');
-      await showSession();
     } catch {
       passwordField.value = '';
-      setMessage('로그인에 실패했습니다. Supabase 소유자 계정 설정을 확인하세요.');
-    } finally { toggleBusy(false); }
+      setMessage('\uc81c\ucd9c\ud55c Supabase \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778\uc774 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4. \uc785\ub825\ud55c Supabase \uacc4\uc815\uacfc \ube44\ubc00\ubc88\ud638\ub97c \ud655\uc778\ud558\uc138\uc694.');
+      toggleBusy(false);
+      return;
+    }
+    passwordField.value = '';
+    loginForm.hidden = true;
+    signedIn.hidden = false;
+    requestBox.hidden = true;
+    setMessage('\uc81c\ucd9c\ud55c Supabase \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc2b5\ub2c8\ub2e4. MCP \uc11c\ubc84\uc5d0\uc11c \ub85c\uadf8\uc778 \uc138\uc158\uc744 \ud655\uc778\ud558\ub294 \uc911\uc785\ub2c8\ub2e4.');
+    try {
+      await showSession({ loginJustSucceeded: true });
+    } catch {
+      loginForm.hidden = true;
+      signedIn.hidden = false;
+      requestBox.hidden = true;
+      setMessage('\uc81c\ucd9c\ud55c Supabase \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778\uc740 \uc131\uacf5\ud588\uc9c0\ub9cc \uc774\ud6c4 \uc11c\ubc84 \uc138\uc158 \ud655\uc778 \ub2e8\uacc4\uc5d0\uc11c \ubb38\uc81c\uac00 \ubc1c\uc0dd\ud588\uc2b5\ub2c8\ub2e4.');
+    } finally {
+      toggleBusy(false);
+    }
   });
 
   async function decide(approve) {

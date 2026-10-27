@@ -10,7 +10,7 @@ import time
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from jwt.exceptions import PyJWKClientError
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from imap_connector.oauth_auth import OAuthSettings, SupabaseJwtVerifier
 from imap_connector.http_server import BearerGate, OAuthGate, SETUP_PAGE, create_http_app
@@ -40,7 +40,7 @@ class StaticKeySet:
 
     def get_signing_key_from_jwt(self, token: str):
         if self.fail:
-            raise PyJWKClientError("synthetic JWKS outage")
+            raise PyJWKClientConnectionError("synthetic network detail must not leak")
         header = jwt.get_unverified_header(token)
         if header.get("kid") != "synthetic-key-id":
             raise PyJWKClientError("synthetic key ID not found")
@@ -209,6 +209,117 @@ def test_jwks_failure_fails_closed(signing_keys, settings):
     assert verifier(settings, private_key, fail=True).verify_mcp_token(token) is None
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected_reason"),
+    [
+        ({"iss": "https://wrong-project.supabase.co/auth/v1"}, "issuer_mismatch"),
+        ({"aud": "wrong-audience"}, "audience_mismatch"),
+        ({"exp": int(time.time()) - 30}, "expired"),
+        ({"nbf": int(time.time()) + 300}, "not_yet_valid"),
+    ],
+)
+def test_owner_session_verification_reports_only_fixed_claim_categories(
+    overrides, expected_reason, signing_keys, settings
+):
+    private_key, _ = signing_keys
+    session_claims = {
+        "iss": settings.issuer,
+        "aud": "authenticated",
+        "exp": int(time.time()) + 300,
+        "iat": int(time.time()) - 1,
+        "sub": OWNER_SUB,
+    }
+    session_claims.update(overrides)
+    token = make_token(session_claims, private_key)
+
+    result = verifier(settings, private_key).verify_owner_session_detailed_sync(token)
+    assert result.owner is None
+    assert result.reason == expected_reason
+    assert "wrong-project" not in result.reason
+    assert "synthetic" not in result.reason
+
+
+def test_owner_session_verification_classifies_missing_claim_and_signature(signing_keys, settings):
+    private_key, wrong_key = signing_keys
+    missing_subject = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+        },
+        private_key,
+    )
+    bad_signature = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+            "sub": OWNER_SUB,
+        },
+        wrong_key,
+    )
+    token_verifier = verifier(settings, private_key)
+
+    assert token_verifier.verify_owner_session_detailed_sync(missing_subject).reason == "missing_claim"
+    assert token_verifier.verify_owner_session_detailed_sync(bad_signature).reason == "invalid_signature"
+
+
+def test_owner_session_verification_classifies_jwks_outage_without_exposing_transport_error(signing_keys, settings):
+    private_key, _ = signing_keys
+    token = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+            "sub": OWNER_SUB,
+        },
+        private_key,
+    )
+
+    result = verifier(settings, private_key, fail=True).verify_owner_session_detailed_sync(token)
+    assert result.owner is None
+    assert result.reason == "jwks_unavailable"
+    assert "synthetic network detail" not in result.reason
+
+
+def test_owner_session_verification_classifies_unsupported_algorithm_and_key_mismatch(signing_keys, settings):
+    private_key, _ = signing_keys
+    hs_token = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+            "sub": OWNER_SUB,
+        },
+        b"synthetic-hmac-key-unused-in-production",
+        algorithm="HS256",
+    )
+    rs_token = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+            "sub": OWNER_SUB,
+        },
+        private_key,
+    )
+
+    assert verifier(settings, private_key).verify_owner_session_detailed_sync(hs_token).reason == "unsupported_algorithm"
+    assert verifier(settings, private_key, algorithm="ES256").verify_owner_session_detailed_sync(rs_token).reason == "key_algorithm_mismatch"
+
+
+def test_owner_session_verification_classifies_malformed_token(signing_keys, settings):
+    result = verifier(settings, signing_keys[0]).verify_owner_session_detailed_sync("not-a-jwt")
+
+    assert result.owner is None
+    assert result.reason == "malformed_token"
+
+
 def test_owner_session_uses_authenticated_audience_only_for_owner(signing_keys, settings):
     private_key, _ = signing_keys
     token = make_token(
@@ -325,6 +436,11 @@ def test_oauth_metadata_route_and_consent_ui_are_prepared_without_mail_credentia
     assert "publishableKey" in page_text
     assert "response.status === 401" in page_text
     assert "response.status === 403" in page_text
+    assert "issuer_mismatch:" in page_text
+    assert "jwks_unavailable:" in page_text
+    assert "await showSession({ loginJustSucceeded: true })" in page_text
+    assert "ownerCheck.kind === 'invalid'" in page_text
+    assert "console.log" not in page_text
     assert "nonce-" in page.headers["content-security-policy"]
 
 

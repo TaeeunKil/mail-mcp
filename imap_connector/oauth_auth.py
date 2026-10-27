@@ -17,7 +17,19 @@ import uuid
 import anyio
 import jwt
 from jwt import PyJWKClient
-from jwt.exceptions import PyJWTError
+from jwt.exceptions import (
+    DecodeError,
+    ExpiredSignatureError,
+    ImmatureSignatureError,
+    InvalidIssuedAtError,
+    InvalidIssuerError,
+    InvalidSignatureError,
+    MissingRequiredClaimError,
+    PyJWKClientConnectionError,
+    PyJWKClientError,
+    PyJWKSetError,
+    PyJWTError,
+)
 from mcp.server.auth.provider import AccessToken
 
 from .core import ConnectorError, clean
@@ -35,6 +47,29 @@ _JWT_ALGORITHMS = frozenset({"RS256", "ES256"})
 _MAX_JWT_LENGTH = 16_384
 _MCP_SCOPE_CLAIM = "mail_mcp_scopes"
 _REQUIRED_MCP_SCOPE = "mail:read"
+_VERIFICATION_REASONS = frozenset({
+    "ok",
+    "malformed_token",
+    "unsupported_algorithm",
+    "invalid_key_id",
+    "jwks_unavailable",
+    "jwks_invalid",
+    "signing_key_not_found",
+    "key_algorithm_mismatch",
+    "invalid_signature",
+    "issuer_mismatch",
+    "audience_mismatch",
+    "expired",
+    "not_yet_valid",
+    "issued_at_invalid",
+    "missing_claim",
+    "invalid_subject",
+    "owner_mismatch",
+    "client_mismatch",
+    "scope_mismatch",
+    "invalid_claims",
+    "verification_unavailable",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +157,14 @@ class OAuthSettings:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OwnerSessionVerification:
+    """Safe outcome for the consent UI; reason is always a fixed category."""
+
+    owner: bool | None
+    reason: str
+
+
 def _is_uuid(value: str) -> bool:
     try:
         return str(uuid.UUID(value)) == value.lower()
@@ -153,23 +196,43 @@ class SupabaseJwtVerifier:
             timeout=3,
         )
 
-    def _decode(self, token: str, *, purpose: str) -> dict | None:
+    def _decode_detailed(self, token: str, *, purpose: str) -> tuple[dict | None, str]:
         if not isinstance(token, str) or not token or len(token) > _MAX_JWT_LENGTH:
-            return None
+            return None, "malformed_token"
         try:
             header = jwt.get_unverified_header(token)
-            algorithm = header.get("alg")
-            kid = header.get("kid")
-            if algorithm not in _JWT_ALGORITHMS or not isinstance(kid, str) or not kid or len(kid) > 256:
-                return None
+        except (DecodeError, PyJWTError, TypeError, ValueError):
+            return None, "malformed_token"
 
+        if not isinstance(header, Mapping):
+            return None, "malformed_token"
+        algorithm = header.get("alg")
+        if algorithm not in _JWT_ALGORITHMS:
+            return None, "unsupported_algorithm"
+        kid = header.get("kid")
+        if not isinstance(kid, str) or not kid or len(kid) > 256:
+            return None, "invalid_key_id"
+
+        try:
             signing_key = self.jwks_client.get_signing_key_from_jwt(token)
-            if getattr(signing_key, "algorithm_name", None) != algorithm:
-                return None
+        except PyJWKClientConnectionError:
+            return None, "jwks_unavailable"
+        except PyJWKSetError:
+            return None, "jwks_invalid"
+        except PyJWKClientError:
+            return None, "signing_key_not_found"
+        except (OSError, TimeoutError):
+            return None, "jwks_unavailable"
+        except Exception:
+            return None, "verification_unavailable"
 
-            required = ["iss", "aud", "exp", "iat", "sub"]
-            if purpose == "mcp":
-                required.extend(["client_id", _MCP_SCOPE_CLAIM])
+        if getattr(signing_key, "algorithm_name", None) != algorithm:
+            return None, "key_algorithm_mismatch"
+
+        required = ["iss", "aud", "exp", "iat", "sub"]
+        if purpose == "mcp":
+            required.extend(["client_id", _MCP_SCOPE_CLAIM])
+        try:
             claims = jwt.decode(
                 token,
                 signing_key.key,
@@ -180,32 +243,51 @@ class SupabaseJwtVerifier:
                     "require": required,
                 },
             )
-            if not isinstance(claims, dict):
-                return None
-
-            expected_audience = self.settings.resource_url if purpose == "mcp" else "authenticated"
-            if claims.get("aud") != expected_audience:
-                return None
-            subject = claims.get("sub")
-            if not isinstance(subject, str) or not subject:
-                return None
-            if purpose == "mcp" and subject != self.settings.owner_sub:
-                return None
-
-            if purpose == "mcp":
-                if claims.get("client_id") != self.settings.client_id:
-                    return None
-                scopes = claims.get(_MCP_SCOPE_CLAIM)
-                if scopes != [_REQUIRED_MCP_SCOPE]:
-                    return None
-            return claims
-        except (PyJWTError, OSError, TimeoutError, ValueError, TypeError, KeyError):
-            # Never log raw tokens, claims, or network errors. A missing or
-            # unreachable JWKS endpoint is an authentication failure.
-            return None
+        except ExpiredSignatureError:
+            return None, "expired"
+        except ImmatureSignatureError:
+            return None, "not_yet_valid"
+        except InvalidIssuedAtError:
+            return None, "issued_at_invalid"
+        except InvalidIssuerError:
+            return None, "issuer_mismatch"
+        except InvalidSignatureError:
+            return None, "invalid_signature"
+        except MissingRequiredClaimError:
+            return None, "missing_claim"
+        except DecodeError:
+            return None, "malformed_token"
+        except PyJWTError:
+            return None, "invalid_claims"
+        except (OSError, TimeoutError):
+            return None, "jwks_unavailable"
         except Exception:
-            # Fail closed for transport and JWKS client failures as well.
-            return None
+            return None, "verification_unavailable"
+
+        if not isinstance(claims, dict):
+            return None, "invalid_claims"
+
+        expected_audience = self.settings.resource_url if purpose == "mcp" else "authenticated"
+        if claims.get("aud") != expected_audience:
+            return None, "audience_mismatch"
+        subject = claims.get("sub")
+        if not isinstance(subject, str) or not subject:
+            return None, "invalid_subject"
+        if purpose == "mcp" and subject != self.settings.owner_sub:
+            return None, "owner_mismatch"
+
+        if purpose == "mcp":
+            if claims.get("client_id") != self.settings.client_id:
+                return None, "client_mismatch"
+            scopes = claims.get(_MCP_SCOPE_CLAIM)
+            if scopes != [_REQUIRED_MCP_SCOPE]:
+                return None, "scope_mismatch"
+        return claims, "ok"
+
+    def _decode(self, token: str, *, purpose: str) -> dict | None:
+        """Compatibility wrapper that intentionally hides all failure details."""
+        claims, _reason = self._decode_detailed(token, purpose=purpose)
+        return claims
 
     def verify_mcp_token(self, token: str) -> AccessToken | None:
         claims = self._decode(token, purpose="mcp")
@@ -231,10 +313,23 @@ class SupabaseJwtVerifier:
 
     def verify_owner_session_sync(self, token: str) -> bool | None:
         """Validate an authenticated-audience session without MCP client/scope claims."""
-        claims = self._decode(token, purpose="session")
+        return self.verify_owner_session_detailed_sync(token).owner
+
+    async def verify_owner_session_detailed(self, token: str) -> OwnerSessionVerification:
+        """Return only a fixed, non-sensitive category for consent diagnostics."""
+        return await anyio.to_thread.run_sync(self.verify_owner_session_detailed_sync, token)
+
+    def verify_owner_session_detailed_sync(self, token: str) -> OwnerSessionVerification:
+        claims, reason = self._decode_detailed(token, purpose="session")
         if claims is None:
-            return None
-        return claims["sub"] == self.settings.owner_sub
+            # Keep the response vocabulary closed even if future internal code
+            # accidentally supplies an unrecognized category.
+            if reason not in _VERIFICATION_REASONS or reason == "ok":
+                reason = "verification_unavailable"
+            return OwnerSessionVerification(owner=None, reason=reason)
+        if claims["sub"] != self.settings.owner_sub:
+            return OwnerSessionVerification(owner=False, reason="owner_mismatch")
+        return OwnerSessionVerification(owner=True, reason="ok")
 
 
 def is_valid_authorization_id(value: str | None) -> bool:
