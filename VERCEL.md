@@ -75,7 +75,7 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 - Supabase Site URL은 `https://mail-mcp-beta.vercel.app`, Authorization Path는 `/oauth/consent`로 확인했습니다. 이 조합의 동의 화면 경로는 `https://mail-mcp-beta.vercel.app/oauth/consent`입니다.
 - ChatGPT가 보여준 등록 callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. Supabase OAuth Apps에 정확히 일치하는 URI로 등록해야 합니다. 와일드카드는 사용하지 않습니다.
 - Dynamic Client Registration은 OFF입니다. 공개 PKCE client는 생성됐고 ChatGPT callback URI는 `https://chatgpt.com/connector/oauth/76ZjhxWCIq3k`입니다. client 식별자는 Vercel의 `MAIL_MCP_OAUTH_CLIENT_ID`에 설정해야 하며 소스에 저장하지 않습니다. 전체 OAuth 흐름은 아직 검증하지 않았습니다.
-- 최신 코드가 main에서 배포됐고 Vercel 배포 체크는 성공입니다. 코드에는 `/oauth/consent` 경로가 포함됐지만 이 실행환경에서 해당 URL의 실제 HTTP 응답을 얻지 못했습니다. Vercel에 OAuth client ID/owner UUID와 Hook, 메일 설정이 없으므로 Production은 진단 상태입니다.
+- 이전 배포 확인에서는 OAuth 설정이 없었습니다. 이후 사용자가 Vercel OAuth 환경변수와 owner/client 제한 Hook을 구성하고 재배포했다고 확인했습니다. Naver IMAP 자격증명은 의도적으로 설정하지 않았습니다. 현재 배포 코드는 IMAP 설정이 없으면 `/mcp`에 503을 반환하며, 이 문서의 로컬 변경은 인증 준비 상태와 메일 준비 상태를 분리합니다. 브라우저에서 OAuth 연결 시작을 확인 중입니다.
 
 ### 로그인과 동의 흐름
 
@@ -84,7 +84,7 @@ Bearer 토큰과 네이버 앱 비밀번호는 서로 다른 값입니다. Beare
 3. Supabase JS SDK의 `getAuthorizationDetails`, `approveAuthorization`, `denyAuthorization`으로 요청한 앱, callback URI, OIDC scope를 확인하고 동의/거부합니다. Authorization Code와 PKCE 교환은 Supabase가 처리합니다.
 4. 서버는 `/mcp` 요청마다 Supabase JWKS 서명, 정확한 issuer와 리소스 audience, 만료/발급 시각, 고정 owner UUID, 등록된 OAuth client ID, `mail_mcp_scopes=["mail:read"]` claim을 확인합니다. 불일치하거나 JWKS에 접근할 수 없으면 거부합니다.
 5. Supabase 기본 audience `authenticated`를 MCP 리소스 audience로 간주하지 않습니다. Custom Access Token Hook 예시는 OAuth client 하나에만 정확한 MCP audience와 앱 권한 claim을 추가합니다. 표준 OAuth scopes는 OIDC 정보용이며 `mail:read` 같은 사용자 정의 scope는 현재 Supabase OAuth에서 지원되지 않습니다.
-6. OAuth, client ID, owner UUID, 리소스 URL, Naver 설정 중 필요한 값이 빠지면 `/mcp`는 503이고 메일 도구를 등록하지 않습니다. 네이버 IMAP 연결은 OAuth 소유자 검증 완료 후에도 명시적 설정이 있기 전까지 열리지 않습니다.
+6. OAuth 환경 설정이 빠지거나 잘못되면 `/mcp`는 503으로 fail closed 합니다. OAuth 설정이 준비되면 토큰 없는 `/mcp` 요청은 401 OAuth challenge를 반환합니다. Naver IMAP 설정이 없을 때 소유자 인증에 성공한 클라이언트에는 비민감 `service_status`만 보이고 메일 도구는 등록되지 않습니다. 유효한 Naver 설정이 추가된 뒤에만 기존 읽기 전용 메일 도구가 등록됩니다.
 
 ### Vercel Production 변수 이름
 
@@ -107,7 +107,7 @@ Custom Access Token Hook SQL은 예시일 뿐 실행되지 않았습니다. owne
 
 ### 현재 확인되지 않은 항목
 
-- 브라우저에서 OAuth Server, Site URL/Authorization Path, DCR OFF 및 공개 PKCE client 생성을 확인했습니다. ChatGPT callback URI도 등록됐습니다. owner UUID와 audience/권한 Hook은 미설정이며 authorization/consent/token exchange는 end-to-end 검증하지 않았습니다.
+- 브라우저에서 OAuth Server, Site URL/Authorization Path, DCR OFF, 공개 PKCE client, ChatGPT callback URI, owner/client 제한 Hook 설정을 확인했습니다. Production OAuth 연결의 end-to-end 결과는 별도 브라우저 확인 중입니다.
 - 프로젝트 JWKS는 ES256으로 확인됐고 로컬 검증기는 ES256 및 RS256을 제한적으로 허용합니다. 실제 Supabase 토큰이나 ChatGPT callback을 로컬 테스트에 사용하지 않았습니다.
 - Supabase OAuth가 MCP 클라이언트의 `resource`, `offline_access`, 공개 PKCE 조합을 처리하지 못했다는 [공개 호환성 보고](https://github.com/supabase/auth/issues/2820)가 있습니다. 사용자 프로젝트에서 재현됐다는 뜻은 아닙니다. 실제 client 등록 후 authorize → 로그인 → 동의 → callback → MCP token 요청을 확인해야 합니다.
-- 테스트는 합성 RSA/ES256 키와 모의 claim만 사용했습니다. 메일 연결, 실제 OAuth grant, 비밀 등록, production OAuth 요청은 수행하지 않았습니다.
+- 로컬 테스트는 합성 RSA/ES256 키와 모의 claim만 사용합니다. 이 작업에서 메일 연결이나 비밀 등록은 하지 않습니다. Production OAuth 연결 시작 결과는 브라우저 테스트와 별도로 확인해야 합니다.

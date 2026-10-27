@@ -254,8 +254,18 @@ def test_oauth_http_configuration_fails_closed_until_required_mail_credentials_e
 def test_oauth_metadata_route_and_consent_ui_are_prepared_without_mail_credentials():
     server, private_app = create_http_app(environ={"MAIL_MCP_MODE": "oauth", **BASE_ENV})
     assert isinstance(private_app, OAuthGate)
-    assert private_app.ready is False
-    assert server._tool_manager._tools == {}
+    assert private_app.auth_ready is True
+    assert private_app.app.state.mail_mcp_auth_ready is True
+    assert private_app.app.state.mail_mcp_ready is False
+    assert set(server._tool_manager._tools) == {"service_status"}
+    status = server._tool_manager._tools["service_status"].fn()
+    assert status == {
+        "service": "readonly-imap-mcp",
+        "mode": "oauth-ready-mail-disabled",
+        "mail_access": "disabled",
+        "mail_connection": "not configured",
+        "authentication": "Supabase OAuth; owner/client/audience/scope checked",
+    }
 
     routes = {route.path for route in private_app.app.router.routes if hasattr(route, "path")}
     assert "/oauth/consent" in routes
@@ -292,7 +302,7 @@ def test_synthetic_naver_configuration_registers_only_existing_read_tools():
         "NAVER_IMAP_APP_PASSWORD": "TEST_ONLY_DO_NOT_USE_SYNTHETIC_APP_PASSWORD",
     })
     assert isinstance(private_app, OAuthGate)
-    assert private_app.ready is True
+    assert private_app.auth_ready is True
     tool_names = set(server._tool_manager._tools)
     assert tool_names == {"service_status", "list_accounts", "list_folders", "search_messages", "read_message"}
     assert tool_names.isdisjoint({"send_email", "delete_email", "move_email", "mark_read"})

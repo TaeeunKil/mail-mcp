@@ -2,8 +2,8 @@
 
 Supabase remains the OAuth authorization server. This module only verifies the
 bearer access tokens it issues; it never exchanges authorization codes or
-creates tokens. OAuth mode stays unavailable until every required public
-configuration value and Naver credential is present.
+creates tokens. OAuth authentication requires the public configuration values.
+Mail tools are registered only when valid Naver credentials are also present.
 """
 
 from __future__ import annotations

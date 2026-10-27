@@ -251,10 +251,10 @@ class BearerGate:
 class OAuthGate:
     """Require a verified owner/client/resource token for every private MCP call."""
 
-    def __init__(self, app: ASGIApp, *, verifier: SupabaseJwtVerifier, ready: bool, metadata_url: str):
+    def __init__(self, app: ASGIApp, *, verifier: SupabaseJwtVerifier, auth_ready: bool, metadata_url: str):
         self.app = app
         self.verifier = verifier
-        self.ready = ready
+        self.auth_ready = auth_ready
         self.metadata_url = metadata_url
 
     async def _respond(
@@ -287,7 +287,7 @@ class OAuthGate:
         if any(key.lower() in {"token", "access_token"} for key, _ in parse_qsl(request.url.query, keep_blank_values=True)):
             await self._respond(scope, receive, send, 400, "url_tokens_not_supported")
             return
-        if not self.ready:
+        if not self.auth_ready:
             await self._respond(scope, receive, send, 503, "private_service_unavailable")
             return
         authorization = request.headers.getlist("authorization")
@@ -338,6 +338,7 @@ def create_http_app(environ: Mapping[str, str] | None = None):
     mode = env.get(TOKEN_MODE_ENV, "diagnostic")
     token_digest: bytes | None = None
     ready = False
+    auth_ready = False
     oauth_settings = OAuthSettings.from_environ(env) if mode == OAUTH_MODE else None
     oauth_verifier = SupabaseJwtVerifier(oauth_settings) if oauth_settings is not None else None
     credential_env: dict[str, str | None] = {}
@@ -388,7 +389,8 @@ def create_http_app(environ: Mapping[str, str] | None = None):
             "NAVER_IMAP_USER": env.get("NAVER_IMAP_USER"),
             "NAVER_IMAP_APP_PASSWORD": env.get("NAVER_IMAP_APP_PASSWORD"),
         }
-        ready = oauth_settings is not None and has_naver_credentials(credential_env)
+        auth_ready = oauth_settings is not None
+        ready = auth_ready and has_naver_credentials(credential_env)
         if ready:
             server = _new_server(
                 "Private read-only Naver mail",
@@ -403,6 +405,21 @@ def create_http_app(environ: Mapping[str, str] | None = None):
             })
             connector = lambda: Connector(NAVER_ACCOUNT, environ=credential_env)
             register_mail_tools(server, connector)
+        elif auth_ready:
+            # OAuth can be exercised without opening a mailbox. Keep the
+            # authenticated surface to this static status tool until both
+            # Naver credentials are configured.
+            server = _new_server(
+                "Private read-only Naver mail",
+                "OAuth owner access is ready; mail access is disabled until account settings are configured.",
+            )
+            _register_status(server, {
+                "service": "readonly-imap-mcp",
+                "mode": "oauth-ready-mail-disabled",
+                "mail_access": "disabled",
+                "mail_connection": "not configured",
+                "authentication": "Supabase OAuth; owner/client/audience/scope checked",
+            })
         else:
             server = _new_server(
                 "Private read-only Naver mail",
@@ -461,6 +478,7 @@ def create_http_app(environ: Mapping[str, str] | None = None):
         app.router.routes.extend(metadata_routes)
     app.state.mail_mcp_mode = mode
     app.state.mail_mcp_ready = ready if mode in {"token", OAUTH_MODE} else mode == "diagnostic"
+    app.state.mail_mcp_auth_ready = auth_ready if mode == OAUTH_MODE else mode == "diagnostic"
     app.state.mail_mcp_server = server
     if mode == "token":
         app = BearerGate(app, token_digest=token_digest, ready=ready)
@@ -475,7 +493,7 @@ def create_http_app(environ: Mapping[str, str] | None = None):
             app = OAuthGate(
                 app,
                 verifier=oauth_verifier,
-                ready=ready,
+                auth_ready=auth_ready,
                 metadata_url=metadata_url,
             )
         else:

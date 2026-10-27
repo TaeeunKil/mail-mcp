@@ -152,3 +152,79 @@ def test_diagnostic_mode_rejects_url_tokens(client):
     assert response.status_code == 400
     assert response.json() == {"error": "url_tokens_not_supported"}
     assert "never-use-url-tokens" not in response.text
+
+
+def test_oauth_authentication_is_available_without_mail_credentials(monkeypatch):
+    from types import SimpleNamespace
+
+    from imap_connector.http_server import OAuthGate
+
+    base_env = {
+        "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co",
+        "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test_only_do_not_use_1234567890",
+        "MAIL_MCP_OAUTH_CLIENT_ID": "synthetic-oauth-client-id",
+        "MAIL_MCP_OWNER_SUB": "12345678-1234-5678-1234-567812345678",
+        "MAIL_MCP_RESOURCE_URL": "https://mail-mcp-beta.vercel.app/mcp",
+    }
+    server, oauth_app = create_http_app({"MAIL_MCP_MODE": "oauth", **base_env})
+    assert isinstance(oauth_app, OAuthGate)
+
+    async def accept_synthetic_token(token):
+        return SimpleNamespace(subject="synthetic-owner") if token == "synthetic-token" else None
+
+    monkeypatch.setattr(oauth_app.verifier, "verify_mcp_token_async", accept_synthetic_token)
+
+    with TestClient(oauth_app) as oauth_client:
+        unauthenticated = rpc(
+            oauth_client,
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "offline-test", "version": "1"},
+            },
+        )
+        assert unauthenticated.status_code == 401
+        assert unauthenticated.headers["www-authenticate"] == (
+            'Bearer resource_metadata="https://mail-mcp-beta.vercel.app/'
+            '.well-known/oauth-protected-resource/mcp", error="invalid_token"'
+        )
+
+        auth = {"Authorization": "Bearer synthetic-token"}
+        initialized = rpc(
+            oauth_client,
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "offline-test", "version": "1"},
+            },
+            request_id=2,
+            headers=auth,
+        )
+        assert initialized.status_code == 200
+        ready = oauth_client.post(
+            "/mcp",
+            headers={"Accept": "application/json", **auth},
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        )
+        assert ready.status_code == 202
+
+        listed = rpc(oauth_client, "tools/list", request_id=3, headers=auth)
+        assert listed.status_code == 200
+        assert {tool["name"] for tool in listed.json()["result"]["tools"]} == {"service_status"}
+
+        status = rpc(
+            oauth_client,
+            "tools/call",
+            {"name": "service_status", "arguments": {}},
+            request_id=4,
+            headers=auth,
+        )
+        assert status.status_code == 200
+        result = json.loads(status.json()["result"]["content"][0]["text"])
+        assert result["mail_access"] == "disabled"
+        assert result["mail_connection"] == "not configured"
+        assert "NAVER_IMAP" not in json.dumps(result)
+
+    assert set(server._tool_manager._tools) == {"service_status"}

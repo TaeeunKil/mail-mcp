@@ -20,7 +20,7 @@
 
 ## Supabase OAuth와 메일 접근 경계
 
-OAuth 모드는 `MAIL_MCP_MODE=oauth`로 명시적으로 켭니다. 프로젝트 URL, publishable key, OAuth client ID, 소유자의 Supabase UUID, 정확한 리소스 URL이 모두 필요합니다. 이 값 중 하나라도 빠지면 `/mcp`는 fail closed입니다.
+OAuth 모드는 `MAIL_MCP_MODE=oauth`로 명시적으로 켭니다. 프로젝트 URL, publishable key, OAuth client ID, 소유자의 Supabase UUID, 정확한 리소스 URL이 모두 필요합니다. 이 값 중 하나라도 빠지면 `/mcp`는 fail closed입니다. OAuth 설정이 준비되면 토큰 없는 `/mcp` 요청에는 401 challenge를 반환합니다. Naver IMAP 자격증명이 없으면 소유자 인증 후에도 비민감 `service_status`만 노출하고 메일 도구를 등록하지 않습니다. IMAP 자격증명은 OAuth 로그인이나 owner 검증에 필요하지 않습니다.
 
 MCP access token은 Supabase 비대칭 JWKS에서 제한된 RS256/ES256 알고리즘만 허용하여 검증합니다. 서버는 issuer, signature, expiration, issued-at, exact audience, exact owner `sub`, allowlisted `client_id`, `mail_mcp_scopes=["mail:read"]`를 확인합니다. Supabase 기본 `aud=authenticated`는 UI의 Supabase owner-session 확인에만 허용하며 MCP resource token으로는 허용하지 않습니다. JWKS 장애와 claim 오류는 거부되며 토큰/claim/JWKS 오류를 로그에 기록하지 않습니다.
 
