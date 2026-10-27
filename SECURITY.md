@@ -29,3 +29,13 @@ Supabase OAuth 표준 scope는 OIDC 사용자 정보용입니다. 사용자 정�
 동의 UI는 Supabase publishable key만 브라우저에 전달합니다. service_role 또는 secret key를 전달하지 않습니다. Supabase 로그인 비밀번호는 Naver 앱 비밀번호가 아니며 이 앱에서 보관하지 않습니다. Naver 앱 비밀번호는 Vercel Production 환경변수로만 사용하고 Supabase에 보내지 않습니다.
 
 로그인/동의와 메일 접근은 각각 따로 검증해야 합니다. client 등록이 끝나도 owner UUID, OAuth Hook, MCP audience, Vercel Production 환경변수가 확인되기 전까지는 이메일을 열지 않습니다.
+
+## 본문 및 첨부 읽기 경계
+
+본문 읽기는 `BODY.PEEK`으로 BODYSTRUCTURE에서 확인한 텍스트 파트만 요청합니다. `BODY[]`, 전체 RFC822 FETCH, STORE, 이동, 삭제, 읽음 표시 변경을 사용하지 않습니다. 첨부 목록은 BODYSTRUCTURE로만 만들고 첨부 body section을 요청하지 않습니다. `server_reported_size_bytes`는 서버가 알린 본문 파트 옥테트 수이며, `estimated_decoded_size_bytes`는 전송 인코딩과 라인 바꿈 정보를 알 수 없을 때 추정치 또는 null입니다.
+
+`UIDVALIDITY=0`은 세션 사이 UID 재사용을 허용하는 예외 상태로 처리합니다. 신규 `message_ref`는 원본 헤더·크기·INTERNALDATE의 SHA-256 선택자이며 인증 토큰이 아닙니다. 본문을 읽기 전 매 호출에서 최근 500개 안의 메시지를 다시 찾고, 여러 개가 동일 스냅샷에 맞으면 읽기를 거부합니다. 모든 헤더, 크기, 날짜가 동일한 다른 콘텐츠 대체까지는 완벽하게 구별할 수 없어, 세션 내 헤더/크기 사전·사후 검증을 합니다.
+
+`list_attachments`는 정제한 파일명·MIME 타입·서버 보고 크기 메타데이터만 반환합니다. 파일명은 경로로 사용하지 않고, 첨부 바이트 읽기, 저장, 실행 도구는 등록하지 않습니다. 첨부에 나오는 문장은 불신 사용자 데이터입니다.
+
+RFC 3501은 BODYSTRUCTURE의 body size를 전송 인코딩의 옥테트 수로 정의합니다. [RFC 3501 section 7.4.2](https://www.rfc-editor.org/rfc/rfc3501#section-7.4.2)

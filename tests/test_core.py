@@ -4,13 +4,13 @@ from pathlib import Path
 import ssl
 import pytest
 from imap_connector.core import (Connector, ConnectorError, BoundedIMAP, load_accounts,
-    make_id, decode_id, parse_imap, utf7_encode, utf7_decode, text_parts)
+    make_id, decode_id, parse_imap, utf7_encode, utf7_decode, text_parts, attachment_parts, sanitize_filename)
 from imap_connector.server import safe
 
 ACCOUNTS={'naver':{'host':'imap.naver.com','port':993,'username_env':'TEST_USER','password_env':'TEST_PASS'}}
 HEADER=b'Subject: =?utf-8?b?7YWM7Iqk7Yq4?=\r\nFrom: sender@example.invalid\r\n\r\n'
 PLAIN=b'("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 12 1 NIL NIL)'
-ATTACH=b'("APPLICATION" "PDF" ("NAME" "secret.pdf") NIL NIL "BASE64" 999 NIL ("ATTACHMENT" ("FILENAME" "secret.pdf")))'
+ATTACH=b'("APPLICATION" "PDF" ("NAME" "secret.pdf") NIL NIL "BASE64" 4 NIL ("ATTACHMENT" ("FILENAME" "secret.pdf")))'
 
 class Fake:
     def __init__(self,*args,**kwargs):
@@ -18,6 +18,9 @@ class Fake:
         self.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
         self.search_result=b'501 502'
         self.headers={501:HEADER,502:HEADER}
+        self.structure=None
+        self.internaldate=b'"27-Oct-2026 00:00:00 +0000"'
+        self.mutate_header_after_body=False
         self.part=PLAIN; self.body=base64.b64encode('안녕'.encode())
         assert kwargs['ssl_context'].verify_mode==ssl.CERT_REQUIRED
         assert kwargs['ssl_context'].check_hostname is True
@@ -36,12 +39,17 @@ class Fake:
         if cmd=='SEARCH': return 'OK',[self.search_result]
         assert cmd=='FETCH'
         uid, query=args
+        if 'INTERNALDATE' in query:
+            return 'OK',[b'1000 (UID '+uid.encode()+b' RFC822.SIZE 10000 INTERNALDATE '+self.internaldate+b')']
         if 'BODYSTRUCTURE' in query:
             part=self.part.replace(b'12 1',b'999999 1') if self.large else self.part
-            return 'OK',[b'1000 (UID '+uid.encode()+b' RFC822.SIZE 10000 BODYSTRUCTURE ('+part+b' '+ATTACH+b' "MIXED" NIL NIL))']
+            structure=self.structure or b'('+part+b' '+ATTACH+b' "MIXED" NIL NIL)'
+            return 'OK',[b'1000 (UID '+uid.encode()+b' RFC822.SIZE 10000 BODYSTRUCTURE '+structure+b')']
         assert 'BODY.PEEK' in query
         if '[HEADER]' in query: return 'OK',[(b'header',self.headers.get(int(uid),HEADER))]
         assert '[1]' in query  # attachment section 2 must NEVER be fetched
+        if self.mutate_header_after_body:
+            self.headers[int(uid)]=b'Message-ID: <changed@example.invalid>\r\nSubject: changed\r\n\r\n'
         return 'OK',[(b'body',self.body)]
 
 @pytest.fixture
@@ -115,7 +123,7 @@ def test_uidvalidity_diagnostic_classifies_without_echoing_raw_data(setup,validi
 def test_zero_uidvalidity_returns_same_session_headers_without_readable_ids(setup):
     c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
     result=c.search_messages('naver',limit=1,scan_limit=1)
-    assert result['read_mode']=='headers_only_uidvalidity_zero'
+    assert result['read_mode']=='reference_revalidated_uidvalidity_zero'
     assert result['messages'][0]['id'] is None
     assert result['messages'][0]['body_readable'] is False
     assert result['messages'][0]['headers']['Subject']=='\uD14C\uC2A4\uD2B8'
@@ -124,7 +132,7 @@ def test_zero_uidvalidity_returns_same_session_headers_without_readable_ids(setu
     assert any(x[:2]==('UID','FETCH') and 'BODY.PEEK[HEADER]' in x[3] for x in f.calls)
     assert not any(x[:2]==('UID','FETCH') and 'BODYSTRUCTURE' in x[3] for x in f.calls)
 
-def test_zero_uidvalidity_never_issues_readable_id_for_duplicate_message_ids(setup):
+def test_zero_uidvalidity_disambiguates_duplicate_message_ids_by_header_snapshot(setup):
     c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']
     f.search_result=b'501 502'
     f.headers={
@@ -135,7 +143,8 @@ def test_zero_uidvalidity_never_issues_readable_id_for_duplicate_message_ids(set
     assert [m['headers']['Message-ID'] for m in result['messages']]==[
         '<duplicate@example.invalid>','<duplicate@example.invalid>'
     ]
-    assert all(m['id'] is None and m['body_readable'] is False for m in result['messages'])
+    assert all(m['id'] is None and m['body_readable'] is True for m in result['messages'])
+    assert result['messages'][0]['message_ref'] != result['messages'][1]['message_ref']
 
 def test_missing_message_id_under_zero_uidvalidity_stays_headers_only(setup):
     c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
@@ -144,6 +153,104 @@ def test_missing_message_id_under_zero_uidvalidity_stays_headers_only(setup):
     assert result['messages'][0]['headers']['Message-ID']==''
     assert result['messages'][0]['id'] is None
     assert result['messages'][0]['body_readable'] is False
+
+def test_zero_uidvalidity_body_reference_reads_text_part_only(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    f.headers[502]=b'Message-ID: <one@example.invalid>\r\nSubject: synthetic\r\n\r\n'
+    found=c.search_messages('naver',limit=1,scan_limit=1)['messages'][0]
+    result=c.read_message_by_reference('naver','INBOX',found['message_ref'],found['message_id_header'])
+    assert result['text']=='\uc548\ub155'
+    assert result['read_mode']=='same-session-uid-with-pre-and-post-header-revalidation'
+    fetches=[call for call in f.calls if call[:2]==('UID','FETCH')]
+    assert any('BODY.PEEK[1]' in call[3] for call in fetches)
+    assert not any('BODY.PEEK[2]' in call[3] or 'BODY[]' in call[3] for call in fetches)
+    assert not any(call[0] in ('STORE','EXPUNGE','APPEND','CLOSE') for call in f.calls)
+
+def test_zero_uidvalidity_rejects_reused_uid_with_changed_header(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    f.headers[502]=b'Message-ID: <reused@example.invalid>\r\nSubject: before\r\n\r\n'
+    found=c.search_messages('naver',limit=1,scan_limit=1)['messages'][0]
+    f.headers[502]=b'Message-ID: <reused@example.invalid>\r\nSubject: after\r\n\r\n'
+    with pytest.raises(ConnectorError,match='stale or ambiguous'):
+        c.read_message_by_reference('naver','INBOX',found['message_ref'],found['message_id_header'])
+    assert not any('BODY.PEEK[1]' in str(call) for call in f.calls)
+
+def test_zero_uidvalidity_rejects_duplicate_identical_header_snapshots(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'999 (UID 501)',b'1000 (UID 502)']; f.search_result=b'501 502'
+    duplicate=b'Message-ID: <duplicate@example.invalid>\r\nSubject: same\r\n\r\n'
+    f.headers={501:duplicate,502:duplicate}
+    found=c.search_messages('naver',limit=2,scan_limit=10)['messages'][0]
+    with pytest.raises(ConnectorError,match='stale or ambiguous'):
+        c.read_message_by_reference('naver','INBOX',found['message_ref'],found['message_id_header'])
+    assert not any('BODY.PEEK[1]' in str(call) for call in f.calls)
+
+def test_zero_uidvalidity_rejects_header_change_during_body_fetch(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    f.headers[502]=b'Message-ID: <race@example.invalid>\r\nSubject: before\r\n\r\n'
+    found=c.search_messages('naver',limit=1,scan_limit=1)['messages'][0]
+    f.mutate_header_after_body=True
+    with pytest.raises(ConnectorError,match='changed during read'):
+        c.read_message_by_reference('naver','INBOX',found['message_ref'],found['message_id_header'])
+
+def test_list_attachments_returns_metadata_without_fetching_payload(setup):
+    c,f=setup
+    result=c.list_attachments(make_id('naver','INBOX',123,502))
+    assert len(result['attachments'])==1
+    item=result['attachments'][0]
+    assert item['filename']=='secret.pdf'
+    assert item['media_type']=='application/pdf'
+    assert item['server_reported_size_bytes']==4
+    assert item['size_basis'].startswith('RFC 3501 BODYSTRUCTURE')
+    assert item['estimated_decoded_size_bytes']==3
+    assert not any('BODY.PEEK[2]' in str(call) for call in f.calls)
+    assert not any('BODY[]' in str(call) for call in f.calls)
+    assert not any(call[0] in ('STORE','EXPUNGE','APPEND','CLOSE') for call in f.calls)
+
+def test_zero_uidvalidity_attachment_metadata_uses_revalidated_message_selector(setup):
+    c,f=setup; f.validity_data=[b'0']; f.fetch_rows=[b'1000 (UID 502)']; f.search_result=b'502'
+    f.headers[502]=b'Message-ID: <attach@example.invalid>\r\nSubject: synthetic\r\n\r\n'
+    found=c.search_messages('naver',limit=1,scan_limit=1)['messages'][0]
+    result=c.list_attachments(account='naver',mailbox='INBOX',message_ref=found['message_ref'],message_id_header=found['message_id_header'])
+    assert result['attachments'][0]['filename']=='secret.pdf'
+    assert result['message_ref']==found['message_ref']
+    assert not any('BODY.PEEK[' in str(call) and '[HEADER]' not in str(call) for call in f.calls)
+
+def test_attachment_metadata_decodes_korean_rfc2231_and_never_uses_path(setup):
+    c,f=setup
+    korean=b'UTF-8\'\'%ED%95%9C%EA%B8%80.pdf'
+    f.structure=(b'("APPLICATION" "PDF" ("NAME*" "'+korean+b'") NIL NIL "BASE64" 100 NIL '
+                 b'("ATTACHMENT" ("FILENAME*" "'+korean+b'")))')
+    result=c.list_attachments(make_id('naver','INBOX',123,502))
+    assert result['attachments'][0]['filename']=='한글.pdf'
+    assert sanitize_filename('../../CON.txt')=='_CON.txt'
+    assert sanitize_filename('..\\..\\payload.html')=='payload.html'
+    assert not any('BODY.PEEK[1]' in str(call) or 'BODY.PEEK[2]' in str(call) for call in f.calls)
+
+def test_attachment_size_estimate_is_explicitly_unavailable_without_payload(setup):
+    c,f=setup
+    f.structure=b'("APPLICATION" "OCTET-STREAM" ("NAME" "data.bin") NIL NIL "QUOTED-PRINTABLE" 30 NIL ("ATTACHMENT" ("FILENAME" "data.bin")))'
+    item=c.list_attachments(make_id('naver','INBOX',123,502))['attachments'][0]
+    assert item['server_reported_size_bytes']==30
+    assert item['estimated_decoded_size_bytes'] is None
+    assert 'without fetching content' in item['estimate']
+    assert not any('BODY.PEEK[' in str(call) and '[HEADER]' not in str(call) for call in f.calls)
+
+def test_inline_text_file_with_rfc2231_filename_is_not_read_as_message_body():
+    structure=parse_imap(b'("TEXT" "PLAIN" ("CHARSET" "UTF-8" "NAME*" "UTF-8\'\'%ED%95%9C%EA%B8%80.txt") NIL NIL "BASE64" 20 1 NIL ("INLINE" ("FILENAME*" "UTF-8\'\'%ED%95%9C%EA%B8%80.txt")))')[0]
+    assert text_parts(structure)==[]
+
+def test_attached_rfc822_message_filename_uses_its_mime_extension_fields():
+    structure=[b'MESSAGE',b'RFC822',None,None,None,b'7BIT',b'120',[],[],b'4',None,[b'ATTACHMENT',[b'FILENAME',b'forwarded.eml']]]
+    assert attachment_parts(structure)[0]['filename']=='forwarded.eml'
+
+def test_large_or_active_attachment_metadata_never_fetches_payload(setup):
+    c,f=setup
+    f.structure=b'("TEXT" "HTML" ("NAME" "../page.html") NIL NIL "BASE64" 9000000 NIL ("ATTACHMENT" ("FILENAME" "../page.html")))'
+    item=c.list_attachments(make_id('naver','INBOX',123,502))['attachments'][0]
+    assert item['filename']=='page.html'
+    assert item['media_type']=='text/html'
+    assert item['server_reported_size_bytes']==9000000
+    assert not any('BODY.PEEK[' in str(call) and '[HEADER]' not in str(call) for call in f.calls)
 
 def test_stale_and_legacy_ids_cannot_read_when_uidvalidity_is_zero(setup):
     c,f=setup; f.validity_data=[b'0']

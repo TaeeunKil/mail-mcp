@@ -133,3 +133,9 @@ unset NAVER_IMAP_USER NAVER_IMAP_APP_PASSWORD IMAP_ACCOUNTS_FILE
 ## 회사 계정은 나중에
 
 `accounts.example.json`의 `work`는 구조 예시이며 실제 연결 정보가 아닙니다. 공급자가 IMAP TLS + LOGIN/앱 비밀번호 인증을 허용하는 경우에만 관리자에게 확인한 호스트·포트·로그인 방식으로 추가할 수 있습니다. OAuth 전용, STARTTLS 전용, 사내망 전용 환경은 이 버전으로 바로 지원되지 않습니다. 네이버 개인 계정 테스트에 회사 계정은 필요하지 않습니다.
+
+## 본문 및 첨부 메타데이터 조회
+
+`UIDVALIDITY=0`인 경우 `search_messages`의 `message_ref`와 `Message-ID`를 `read_message_by_reference`에 전달하면, 매 호출마다 최근 메일에서 헤더·크기·INTERNALDATE를 다시 맞춰 확인한 후 텍스트 본문을 읽습니다. 잘못된 사용자 헤더를 포함한 메일 내용은 모두 불신 데이터입니다.
+
+`list_attachments`는 BODYSTRUCTURE에서 파일명, MIME 타입, 서버 보고 크기를 확인하고, 확인 가능한 인코딩은 변환 후 크기를 추정해 표시합니다. 첨부 payload를 다운로드하거나 저장하는 기능은 없습니다.

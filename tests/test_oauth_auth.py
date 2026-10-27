@@ -461,7 +461,10 @@ def test_synthetic_naver_configuration_registers_only_existing_read_tools():
     assert isinstance(private_app, OAuthGate)
     assert private_app.auth_ready is True
     tool_names = set(server._tool_manager._tools)
-    assert tool_names == {"service_status", "list_accounts", "list_folders", "search_messages", "read_message"}
+    assert tool_names == {
+        "service_status", "list_accounts", "list_folders", "search_messages", "read_message",
+        "read_message_by_reference", "list_attachments",
+    }
     assert tool_names.isdisjoint({"send_email", "delete_email", "move_email", "mark_read"})
 
 

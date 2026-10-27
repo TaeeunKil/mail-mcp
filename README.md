@@ -4,7 +4,7 @@
 
 ## 지원 범위와 현재 상태
 
-- `list_accounts`, `list_folders`, `search_messages`, `read_message`만 제공합니다. 메일 발송, 삭제, 이동, 읽음 변경, 첨부 다운로드, SMTP 기능은 없습니다.
+- `list_accounts`, `list_folders`, `search_messages`, `read_message`, `read_message_by_reference`, `list_attachments`만 제공합니다. 메일 발송, 삭제, 이동, 읽음 변경, 첨부 다운로드, SMTP 기능은 없습니다.
 - 원격 Naver IMAP 목적지는 `imap.naver.com:993` TLS로 고정됩니다.
 - 원격 기본 모드는 `diagnostic`이며 정적 `service_status` 하나만 공개합니다. 메일 환경변수는 이 모드에서 읽지 않습니다.
 - `MAIL_MCP_MODE=token`을 명시했을 때만 Bearer 인증 뒤 메일 도구를 등록합니다. 토큰 또는 네이버 설정이 누락/잘못되면 `/mcp`는 503으로 fail closed합니다. 모든 MCP 요청은 `Authorization: Bearer …` 인증을 먼저 통과해야 합니다.
@@ -118,3 +118,10 @@ MCP 호스트 없이 `.venv/bin/python -m imap_connector.server`를 실행하면
 이 저장소에는 개인 메일·실제 자격증명을 포함하지 않습니다. 로컬 테스트 및 문서 검토가 끝난 뒤 소유자가 공개 범위를 결정합니다. 현재 별도의 오픈소스 라이선스는 선택되지 않았으며 `LICENSE` 파일도 없습니다. 저장소 공개가 임의의 사용·수정·재배포 권한 부여를 의미하지 않습니다. 재사용/배포 허용 범위는 소유자가 라이선스를 선택한 뒤 확인하세요.
 
 보안 사용 지침은 [SECURITY.md](SECURITY.md)를 참조하세요. GitHub Actions는 가짜 IMAP과 로컬 stdio 테스트만 실행하며 실제 메일 계정 비밀은 요구하지 않습니다. 워크플로는 배포를 수행하지 않습니다.
+
+## 본문 및 첨부 메타데이터
+
+- 일반 UIDVALIDITY 메일은 `read_message`로 본문의 텍스트 파트만 읽습니다. 전체 RFC822 메시지나 첨부 바이트를 가져오지 않으며, HTML 본문은 텍스트로 변환합니다.
+- Naver가 `UIDVALIDITY=0`을 주는 폴더에서는 `search_messages`가 헤더 스냅샷을 기반으로 `message_ref`를 반환합니다. `read_message_by_reference`는 호출마다 최근 500개 안에서 Message-ID, 원본 헤더, 크기, INTERNALDATE를 다시 확인한 후 현재 IMAP 세션에서만 UID를 쓰고 텍스트 본문 파트를 읽습니다. 완전히 같은 헤더·크기·날짜를 가진 대체 메시지까지 구별하는 프로토콜 식별자는 없으므로 코드는 본문 출력 전 현재 헤더 스냅샷을 다시 검증합니다.
+- `list_attachments`는 IMAP BODYSTRUCTURE 메타데이터만 읽어 정제한 파일명, MIME 타입, 서버 보고 크기, 변환 후 크기 추정치를 보여줍니다. 첨부 payload를 fetch하거나 다운로드하는 도구는 제공하지 않습니다. 파일명과 MIME 타입은 불신 데이터이며 파일 경로로 쓰지 않습니다.
+- 본문 텍스트 파트는 최대 256 KiB까지 읽으며, 초과하면 콘텐츠를 읽지 않습니다. 오프라인 테스트는 실제 메일이 아닌 합성 MIME 데이터만 쓰며, 실제 사용자 메일이나 첨부를 열지 않습니다.

@@ -15,7 +15,10 @@ def test_stdio_protocol():
         async with Client(params) as client:
             listing=await client.list_tools()
             tools=listing.tools if hasattr(listing,'tools') else listing
-            assert {t.name for t in tools}=={'list_accounts','list_folders','search_messages','read_message'}
+            assert {t.name for t in tools}=={
+                'list_accounts','list_folders','search_messages','read_message',
+                'read_message_by_reference','list_attachments',
+            }
             assert all(t.annotations.read_only_hint for t in tools)
             result=await client.call_tool('list_accounts',{})
             assert not result.is_error

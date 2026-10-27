@@ -14,7 +14,7 @@ Vercel 함수는 `app.py`의 ASGI 앱을 사용하고 MCP SDK 2.3.0의 stateless
 | `MAIL_MCP_MODE` | 공개 동작 |
 | --- | --- |
 | 값 없음 또는 `diagnostic` | `service_status` 하나만 공개. 네이버 자격증명과 Bearer 토큰은 조회하지 않음 |
-| `token` | 개인용 Bearer 인증 성공 후 `service_status`, `list_accounts`, `list_folders`, `search_messages`, `read_message` 제공 |
+| `token` | 개인용 Bearer 인증 성공 후 `service_status`, `list_accounts`, `list_folders`, `search_messages`, `read_message`, `read_message_by_reference`, `list_attachments` 제공 |
 | 다른 값 | 비공개 서비스로 fail closed; `/mcp`는 503 |
 
 `token` 모드에서 토큰이나 네이버 설정이 없거나 유효하지 않으면 도구를 등록하지 않고 `/mcp`는 503을 반환합니다. 설정이 정상이어도 인증이 없거나 틀리면 초기화와 도구 목록부터 401로 막습니다. 토큰은 URL query string, 쿠키, 별도 임의 헤더에서 받지 않고 `Authorization: Bearer …`만 받습니다.
@@ -132,3 +132,7 @@ Supabase `signInWithPassword`가 성공한 뒤에도 MCP가 로그인 세션 JWT
 서버는 `SUPABASE_URL`에서 `https://<project-ref>.supabase.co/auth/v1` issuer와 `/auth/v1/.well-known/jwks.json` JWKS URL을 고정합니다. PyJWT 2.15.1의 예외를 위 고정 분류로 매핑하며 오류 문자열을 반환하거나 로깅하지 않습니다. 현재 공개 JWKS 확인은 HTTP 200과 ES256 서명 키를 확인했으며, 이 코드는 ES256/RS256만 허용합니다.
 
 다음 브라우저 확인에서는 UI의 `진단 코드`만 확인하면 됩니다. JWT, `Authorization` 헤더, claim, 이메일, 비밀번호를 공유하지 마세요. `/mcp` 응답은 오류 세부사항을 노출하지 않고 일반 OAuth 401 challenge를 유지합니다.
+
+## 메일 본문·첨부 조회 범위
+
+OAuth/token 인증이 통과한 경우에도 메일 본문은 텍스트 MIME 파트만 `BODY.PEEK`으로 읽습니다. `UIDVALIDITY=0`이면 `search_messages`의 `message_ref`와 `Message-ID`로 매 호출 시 헤더·크기·INTERNALDATE를 다시 맞춰 확인합니다. `list_attachments`는 BODYSTRUCTURE 기반 메타데이터만 반환하며, 첨부 payload를 읽거나 다운로드하는 도구는 없습니다. 오프라인 합성 테스트는 실제 메일 세션을 열지 않습니다.

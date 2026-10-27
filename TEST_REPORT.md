@@ -40,3 +40,10 @@
 - `tests/test_mcp.py::test_stdio_protocol`도 12초 제한 실행에서 클라이언트 코루틴이 시작되기 전 `asyncio.run()`의 이벤트 루프 생성 단계에 멈춥니다.
 - `faulthandler` 스택은 두 경로 모두 Python 3.12.10 Windows `ProactorEventLoop._make_self_pipe()`에서 `socket._fallback_socketpair()`를 거쳐 `socket.accept()`를 기다림을 보여줍니다. `asyncio.new_event_loop()`만 호출하는 최소 스크립트에서도 같은 대기가 재현됐고 7초 후 종료했습니다.
 - 이 실행환경은 루프백 socket-pair 초기화를 완료하지 못합니다. 관찰된 대기는 MCP 앱 코드와 무관합니다. 샌드박스 제한인지 Windows 네트워크 스택 문제인지는 실행환경 설정을 바꾸지 않고 구분할 수 없어 변경하지 않았습니다. 이 bounded 실행들은 assertion 실패가 아닌 환경 제한 상태이며, HTTP lifespan과 stdio protocol은 이 환경에서 미검증입니다.
+
+## 2026-10-27 본문 및 첨부 메타데이터 로컬 검증
+
+- `tests/test_core.py` + `tests/test_oauth_auth.py`: 126 passed. 합성 IMAP 피처로 UIDVALIDITY=0 헤더 재확인, UID 재사용 거부, 텍스트 본문 분리, BODYSTRUCTURE 연결 첨부 메타데이터, RFC2231 한글 파일명, 경로 정제, 파트 payload 미조회를 확인했습니다.
+- `compileall`, `pip check`, `git diff --check`: 통과.
+- Windows 로컬 `tests/test_http.py`, `tests/test_token_auth.py`, `tests/test_mcp.py`는 각 첫 테스트의 MCP lifespan/stdio 초기화에서 30초 넘겨 정상 종료하지 않아 중단했습니다. 패스나 패일로 판정하지 않았으며, 해당 SDK 통합 테스트는 CI에서 확인해야 합니다.
+- 이 검증에서 실제 Naver 메일, 첨부, 비밀값에 접근하지 않았습니다. 이 항목들은 합성 테스트만 통과한 것입니다.
