@@ -112,23 +112,23 @@ Custom Access Token Hook SQL은 예시일 뿐 실행되지 않았습니다. owne
 - Supabase OAuth가 MCP 클라이언트의 `resource`, `offline_access`, 공개 PKCE 조합을 처리하지 못했다는 [공개 호환성 보고](https://github.com/supabase/auth/issues/2820)가 있습니다. 사용자 프로젝트에서 재현됐다는 뜻은 아닙니다. 실제 client 등록 후 authorize → 로그인 → 동의 → callback → MCP token 요청을 확인해야 합니다.
 - 로컬 테스트는 합성 RSA/ES256 키와 모의 claim만 사용합니다. 이 작업에서 메일 연결이나 비밀 등록은 하지 않습니다. Production OAuth 연결 시작 결과는 브라우저 테스트와 별도로 확인해야 합니다.
 
-## OAuth \uc138\uc158 \uc9c4\ub2e8 \ucf54\ub4dc
+## OAuth 세션 진단 코드
 
-Supabase `signInWithPassword`\uac00 \uc131\uacf5\ud55c \ub4a4\uc5d0\ub3c4 MCP\uac00 \ub85c\uadf8\uc778 \uc138\uc158 JWT\ub97c \ubcc4\ub3c4\ub85c \uac80\uc99d\ud569\ub2c8\ub2e4. \uc774 \uac80\uc99d\uc740 \uc138\uc158 `aud=authenticated`, \uac80\uc99d\ub41c Supabase issuer/JWKS, \ub9cc\ub8cc/\uc2dc\uc791 \uc2dc\uac04, `sub`\ub97c \ud655\uc778\ud558\uba70 MCP \ub9ac\uc18c\uc2a4 audience, OAuth client, mail scope\ub97c \ud544\uc694\ub85c \ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4. \ubc18\ub300\ub85c `/mcp`\ub294 \ubcc4\ub3c4\uc758 MCP resource token\uc5d0 \ud544\uc694\ud55c owner/client/audience/scope \uac80\uc99d\uc744 \uadf8\ub300\ub85c \uc801\uc6a9\ud569\ub2c8\ub2e4.
+Supabase `signInWithPassword`가 성공한 뒤에도 MCP가 로그인 세션 JWT를 별도로 검증합니다. 이 검증은 세션 `aud=authenticated`, 검증된 Supabase issuer/JWKS, 만료/시작 시간, `sub`를 확인하며 MCP 리소스 audience, OAuth client, mail scope를 필요로 하지 않습니다. 반대로 `/mcp`는 별도의 MCP resource token에 필요한 owner/client/audience/scope 검증을 그대로 적용합니다.
 
-\uc18c\uc720\uc790 \uc2b9\uc778 UI\ub294 \ube44\ubc00\ubc88\ud638 \ub85c\uadf8\uc778 \uc694\uccad \uc131\uacf5\uacfc \uc774\ud6c4 `/oauth/session-check` \uac80\uc99d\uc744 \ub2e4\ub978 \ub2e8\uacc4\ub85c \ud45c\uc2dc\ud569\ub2c8\ub2e4. \uac80\uc99d\uc774 401\uc744 \ubc18\ud658\ud558\uba74 `reason`\uc740 \uace0\uc815\ub41c \ucf54\ub4dc \ud558\ub098\ub9cc \ub4e4\uc5b4\uc788\uc73c\uba70, token, claim \uac12, exception \ubb38\uc790\uc5f4\uc740 \uc751\ub2f5\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.
+소유자 승인 UI는 비밀번호 로그인 요청 성공과 이후 `/oauth/session-check` 검증을 다른 단계로 표시합니다. 검증이 401을 반환하면 `reason`은 고정된 코드 하나만 들어있으며, token, claim 값, exception 문자열은 응답하지 않습니다.
 
-| \uc751\ub2f5 \ucf54\ub4dc | \uc758\ubbf8 |
+| 응답 코드 | 의미 |
 | --- | --- |
-| `issuer_mismatch` | \ud1a0\ud070 issuer\uac00 `SUPABASE_URL`\uc5d0\uc11c \uacc4\uc0b0\ud55c Supabase issuer\uc640 \ub2e4\ub985\ub2c8\ub2e4. |
-| `audience_mismatch` | \ub85c\uadf8\uc778 \uc138\uc158 audience\uac00 `authenticated`\uac00 \uc544\ub2d9\ub2c8\ub2e4. MCP `/mcp` audience\uc640\ub294 \ub2e4\ub985\ub2c8\ub2e4. |
-| `expired`, `not_yet_valid`, `issued_at_invalid` | \uc138\uc158\uc758 \uc2dc\uac04 \ud074\ub808\uc784\uc744 \ud1b5\uacfc\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. |
-| `invalid_signature`, `key_algorithm_mismatch` | \uc11c\uba85 \uac80\uc99d \uc2e4\ud328 \ub610\ub294 \ud1a0\ud070\uacfc JWKS \ud0a4 \uc54c\uace0\ub9ac\uc998 \ubd88\uc77c\uce58\uc785\ub2c8\ub2e4. |
-| `jwks_unavailable`, `jwks_invalid`, `signing_key_not_found` | \uacf5\uac1c JWKS \uc5f0\uacb0, \uc751\ub2f5 \ud615\uc2dd, \ub610\ub294 \ud0a4 ID \uc120\ud0dd \ubb38\uc81c\uc785\ub2c8\ub2e4. |
-| `missing_claim`, `invalid_subject`, `invalid_claims`, `malformed_token`, `invalid_key_id`, `unsupported_algorithm` | \uc138\uc158 JWT\uc758 \ud615\uc2dd \ub610\ub294 \ud544\uc218 \ud074\ub808\uc784 \ubb38\uc81c\uc785\ub2c8\ub2e4. |
-| `verification_unavailable` | \ubd84\ub958\ud558\uc9c0 \ubabb\ud55c \uc77c\uc2dc\uc801 \uac80\uc99d \uc624\ub958\uc785\ub2c8\ub2e4. |
-| HTTP 403 (`owner: false`) | \uc138\uc158 JWT \uac80\uc99d\uc740 \ud1b5\uacfc\ud588\uc9c0\ub9cc `sub`\uac00 \uc124\uc815\ub41c \uc18c\uc720\uc790\uc640 \ub2e4\ub985\ub2c8\ub2e4. \uac12 \uc790\uccb4\ub294 \ud45c\uc2dc\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4. |
+| `issuer_mismatch` | 토큰 issuer가 `SUPABASE_URL`에서 계산한 Supabase issuer와 다릅니다. |
+| `audience_mismatch` | 로그인 세션 audience가 `authenticated`가 아닙니다. MCP `/mcp` audience와는 다릅니다. |
+| `expired`, `not_yet_valid`, `issued_at_invalid` | 세션의 시간 클레임을 통과하지 못했습니다. |
+| `invalid_signature`, `key_algorithm_mismatch` | 서명 검증 실패 또는 토큰과 JWKS 키 알고리즘 불일치입니다. |
+| `jwks_unavailable`, `jwks_invalid`, `signing_key_not_found` | 공개 JWKS 연결, 응답 형식, 또는 키 ID 선택 문제입니다. |
+| `missing_claim`, `invalid_subject`, `invalid_claims`, `malformed_token`, `invalid_key_id`, `unsupported_algorithm` | 세션 JWT의 형식 또는 필수 클레임 문제입니다. |
+| `verification_unavailable` | 분류하지 못한 일시적 검증 오류입니다. |
+| HTTP 403 (`owner: false`) | 세션 JWT 검증은 통과했지만 `sub`가 설정된 소유자와 다릅니다. 값 자체는 표시하지 않습니다. |
 
-\uc11c\ubc84\ub294 `SUPABASE_URL`\uc5d0\uc11c `https://<project-ref>.supabase.co/auth/v1` issuer\uc640 `/auth/v1/.well-known/jwks.json` JWKS URL\uc744 \uace0\uc815\ud569\ub2c8\ub2e4. PyJWT 2.15.1\uc758 \uc608\uc678\ub97c \uc704 \uace0\uc815 \ubd84\ub958\ub85c \ub9e4\ud551\ud558\uba70 \uc624\ub958 \ubb38\uc790\uc5f4\uc744 \ubc18\ud658\ud558\uac70\ub098 \ub85c\uae45\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4. \ud604\uc7ac \uacf5\uac1c JWKS \ud655\uc778\uc740 HTTP 200\uacfc ES256 \uc11c\uba85 \ud0a4\ub97c \ud655\uc778\ud588\uc73c\uba70, \uc774 \ucf54\ub4dc\ub294 ES256/RS256\ub9cc \ud5c8\uc6a9\ud569\ub2c8\ub2e4.
+서버는 `SUPABASE_URL`에서 `https://<project-ref>.supabase.co/auth/v1` issuer와 `/auth/v1/.well-known/jwks.json` JWKS URL을 고정합니다. PyJWT 2.15.1의 예외를 위 고정 분류로 매핑하며 오류 문자열을 반환하거나 로깅하지 않습니다. 현재 공개 JWKS 확인은 HTTP 200과 ES256 서명 키를 확인했으며, 이 코드는 ES256/RS256만 허용합니다.
 
-\ub2e4\uc74c \ube0c\ub77c\uc6b0\uc800 \ud655\uc778\uc5d0\uc11c\ub294 UI\uc758 `\uc9c4\ub2e8 \ucf54\ub4dc`\ub9cc \ud655\uc778\ud558\uba74 \ub429\ub2c8\ub2e4. JWT, `Authorization` \ud5e4\ub354, claim, \uc774\uba54\uc77c, \ube44\ubc00\ubc88\ud638\ub97c \uacf5\uc720\ud558\uc9c0 \ub9c8\uc138\uc694. `/mcp` \uc751\ub2f5\uc740 \uc624\ub958 \uc138\ubd80\uc0ac\ud56d\uc744 \ub178\ucd9c\ud558\uc9c0 \uc54a\uace0 \uc77c\ubc18 OAuth 401 challenge\ub97c \uc720\uc9c0\ud569\ub2c8\ub2e4.
+다음 브라우저 확인에서는 UI의 `진단 코드`만 확인하면 됩니다. JWT, `Authorization` 헤더, claim, 이메일, 비밀번호를 공유하지 마세요. `/mcp` 응답은 오류 세부사항을 노출하지 않고 일반 OAuth 401 challenge를 유지합니다.
