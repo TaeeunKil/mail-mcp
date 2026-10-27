@@ -186,7 +186,10 @@ class SupabaseJwtVerifier:
             expected_audience = self.settings.resource_url if purpose == "mcp" else "authenticated"
             if claims.get("aud") != expected_audience:
                 return None
-            if claims.get("sub") != self.settings.owner_sub:
+            subject = claims.get("sub")
+            if not isinstance(subject, str) or not subject:
+                return None
+            if purpose == "mcp" and subject != self.settings.owner_sub:
                 return None
 
             if purpose == "mcp":
@@ -222,12 +225,16 @@ class SupabaseJwtVerifier:
         # PyJWKClient performs blocking HTTPS work; keep it off the ASGI loop.
         return await anyio.to_thread.run_sync(self.verify_mcp_token, token)
 
-    async def verify_owner_session(self, token: str) -> bool:
-        """Check the signed-in Supabase user's session for the consent UI."""
+    async def verify_owner_session(self, token: str) -> bool | None:
+        """Validate a Supabase login session; None means invalid, bool means owner match."""
         return await anyio.to_thread.run_sync(self.verify_owner_session_sync, token)
 
-    def verify_owner_session_sync(self, token: str) -> bool:
-        return self._decode(token, purpose="session") is not None
+    def verify_owner_session_sync(self, token: str) -> bool | None:
+        """Validate an authenticated-audience session without MCP client/scope claims."""
+        claims = self._decode(token, purpose="session")
+        if claims is None:
+            return None
+        return claims["sub"] == self.settings.owner_sub
 
 
 def is_valid_authorization_id(value: str | None) -> bool:

@@ -234,6 +234,45 @@ def test_owner_session_uses_authenticated_audience_only_for_owner(signing_keys, 
     token_verifier = verifier(settings, private_key)
     assert token_verifier.verify_owner_session_sync(token) is True
     assert token_verifier.verify_owner_session_sync(wrong_owner) is False
+    # A normal signInWithPassword session has no MCP client or mail-scope claims.
+    assert token_verifier.verify_mcp_token(token) is None
+
+
+def test_mcp_resource_token_cannot_be_used_as_supabase_owner_session(signing_keys, settings):
+    private_key, _ = signing_keys
+    token = make_token(claims(settings), private_key)
+    token_verifier = verifier(settings, private_key)
+
+    assert token_verifier.verify_mcp_token(token) is not None
+    assert token_verifier.verify_owner_session_sync(token) is None
+
+
+def test_invalid_owner_session_is_distinct_from_valid_non_owner_session(signing_keys, settings):
+    private_key, _ = signing_keys
+    valid_other_user = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+            "iat": int(time.time()) - 1,
+            "sub": OTHER_SUB,
+        },
+        private_key,
+    )
+    expired = make_token(
+        {
+            "iss": settings.issuer,
+            "aud": "authenticated",
+            "exp": int(time.time()) - 30,
+            "iat": int(time.time()) - 60,
+            "sub": OWNER_SUB,
+        },
+        private_key,
+    )
+    token_verifier = verifier(settings, private_key)
+
+    assert token_verifier.verify_owner_session_sync(valid_other_user) is False
+    assert token_verifier.verify_owner_session_sync(expired) is None
 
 
 def test_setup_page_does_not_claim_oauth_is_unimplemented_or_active():
@@ -284,6 +323,8 @@ def test_oauth_metadata_route_and_consent_ui_are_prepared_without_mail_credentia
     assert "service_role" not in page_text
     assert "NAVER_IMAP_APP_PASSWORD" not in page_text
     assert "publishableKey" in page_text
+    assert "response.status === 401" in page_text
+    assert "response.status === 403" in page_text
     assert "nonce-" in page.headers["content-security-policy"]
 
 

@@ -228,3 +228,80 @@ def test_oauth_authentication_is_available_without_mail_credentials(monkeypatch)
         assert "NAVER_IMAP" not in json.dumps(result)
 
     assert set(server._tool_manager._tools) == {"service_status"}
+
+
+def test_owner_session_check_is_separate_from_mcp_resource_auth(monkeypatch):
+    from types import SimpleNamespace
+
+    from imap_connector.http_server import OAuthGate
+
+    base_env = {
+        "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co",
+        "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test_only_do_not_use_1234567890",
+        "MAIL_MCP_OAUTH_CLIENT_ID": "synthetic-oauth-client-id",
+        "MAIL_MCP_OWNER_SUB": "12345678-1234-5678-1234-567812345678",
+        "MAIL_MCP_RESOURCE_URL": "https://mail-mcp-beta.vercel.app/mcp",
+    }
+    _, oauth_app = create_http_app({"MAIL_MCP_MODE": "oauth", **base_env})
+    assert isinstance(oauth_app, OAuthGate)
+
+    async def verify_session(token):
+        if token == "synthetic-owner-session":
+            return True
+        if token == "synthetic-other-user-session":
+            return False
+        return None
+
+    async def verify_mcp_token(token):
+        return SimpleNamespace(subject="synthetic-owner") if token == "synthetic-resource-token" else None
+
+    monkeypatch.setattr(oauth_app.verifier, "verify_owner_session", verify_session)
+    monkeypatch.setattr(oauth_app.verifier, "verify_mcp_token_async", verify_mcp_token)
+
+    with TestClient(oauth_app) as oauth_client:
+        owner = oauth_client.get(
+            "/oauth/session-check",
+            headers={"Authorization": "Bearer synthetic-owner-session"},
+        )
+        assert owner.status_code == 200
+        assert owner.json() == {"owner": True}
+
+        other_user = oauth_client.get(
+            "/oauth/session-check",
+            headers={"Authorization": "Bearer synthetic-other-user-session"},
+        )
+        assert other_user.status_code == 403
+        assert other_user.json() == {"owner": False}
+
+        invalid = oauth_client.get(
+            "/oauth/session-check",
+            headers={"Authorization": "Bearer synthetic-invalid-session"},
+        )
+        assert invalid.status_code == 401
+        assert invalid.json() == {"error": "invalid_session"}
+
+        session_to_mcp = rpc(
+            oauth_client,
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "offline-test", "version": "1"},
+            },
+            request_id=5,
+            headers={"Authorization": "Bearer synthetic-owner-session"},
+        )
+        assert session_to_mcp.status_code == 401
+
+        resource_to_mcp = rpc(
+            oauth_client,
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "offline-test", "version": "1"},
+            },
+            request_id=6,
+            headers={"Authorization": "Bearer synthetic-resource-token"},
+        )
+        assert resource_to_mcp.status_code == 200

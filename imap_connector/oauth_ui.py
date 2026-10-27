@@ -131,15 +131,22 @@ try {
   });
 
   async function checkOwner(session) {
-    const response = await fetch('/oauth/session-check', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${session.access_token}` },
-      cache: 'no-store',
-      credentials: 'omit',
-    });
-    if (!response.ok) return false;
+    let response;
+    try {
+      response = await fetch('/oauth/session-check', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: 'no-store',
+        credentials: 'omit',
+      });
+    } catch {
+      return undefined;
+    }
+    if (response.status === 401) return null;
+    if (response.status === 403) return false;
+    if (!response.ok) return undefined;
     const body = await response.json();
-    return body.owner === true;
+    return body.owner === true ? true : undefined;
   }
 
   async function loadAuthorization() {
@@ -172,7 +179,17 @@ try {
       signedIn.hidden = true;
       return;
     }
-    if (!(await checkOwner(session))) {
+    const ownerCheck = await checkOwner(session);
+    if (ownerCheck === null || ownerCheck === undefined) {
+      loginForm.hidden = true;
+      signedIn.hidden = false;
+      requestBox.hidden = true;
+      setMessage(ownerCheck === null
+        ? 'Supabase 로그인 세션을 검증하지 못했습니다. 세션 설정을 확인해 주세요.'
+        : '계정 소유자 확인 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.');
+      return;
+    }
+    if (ownerCheck === false) {
       loginForm.hidden = true;
       signedIn.hidden = false;
       requestBox.hidden = true;
