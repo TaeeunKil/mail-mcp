@@ -721,6 +721,8 @@ class Connector:
                     snapshot = self._snapshot(c, account, mailbox, uid)
                     message = {
                         'id': None,
+                        'account': account,
+                        'mailbox': mailbox,
                         'message_ref': snapshot['message_ref'],
                         'headers': snapshot['headers'],
                         'headers_may_be_truncated': len(snapshot['raw_header']) == 16384,
@@ -733,7 +735,13 @@ class Connector:
                         message['read_mode'] = 'same-message-reference-revalidated-per-call'
                 else:
                     raw = literal(ok(c.uid('FETCH', str(uid), '(BODY.PEEK[HEADER]<0.16384>)')), 16384)
-                    message = {'id': make_id(account, mailbox, validity, uid), 'headers': header_dict(raw), 'headers_may_be_truncated': len(raw) == 16384}
+                    message = {
+                        'id': make_id(account, mailbox, validity, uid),
+                        'account': account,
+                        'mailbox': mailbox,
+                        'headers': header_dict(raw),
+                        'headers_may_be_truncated': len(raw) == 16384,
+                    }
                 results.append(message)
             return {'messages': results, 'scanned_recent': len(uids), 'scope': 'recent messages only, newest UID first', 'has_older_messages': count > scan_limit, 'more_matches_in_window': len(matches) > limit, 'read_mode': read_mode}
 

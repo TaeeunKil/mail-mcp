@@ -87,6 +87,8 @@ def test_search_uses_valid_bounded_sequence_ranges(setup,scan_limit,sequence_set
     assert ('FETCH',sequence_set,'(UID)') in f.calls
     assert len(result['messages'])==1
     assert decode_id(result['messages'][0]['id'])==['naver','INBOX',123,502]
+    assert result['messages'][0]['account']=='naver'
+    assert result['messages'][0]['mailbox']=='INBOX'
     assert c.read_message(result['messages'][0]['id'])['id']==result['messages'][0]['id']
     assert not any(x[0] in ('STORE','EXPUNGE','APPEND','CLOSE') for x in f.calls)
 
@@ -126,6 +128,8 @@ def test_zero_uidvalidity_returns_same_session_headers_without_readable_ids(setu
     assert result['read_mode']=='reference_revalidated_uidvalidity_zero'
     assert result['messages'][0]['id'] is None
     assert result['messages'][0]['body_readable'] is False
+    assert result['messages'][0]['account']=='naver'
+    assert result['messages'][0]['mailbox']=='INBOX'
     assert result['messages'][0]['headers']['Subject']=='\uD14C\uC2A4\uD2B8'
     assert ('FETCH','1000:1000','(UID)') in f.calls
     assert any(x[:2]==('UID','SEARCH') for x in f.calls)
