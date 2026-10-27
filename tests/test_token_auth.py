@@ -80,7 +80,7 @@ def test_unready_private_mode_returns_503_before_tools(private_client):
     assert "list_accounts" not in response.text
 
 
-def test_private_mode_initializes_and_lists_only_existing_read_only_tools(private_client):
+def test_private_mode_initializes_and_lists_read_only_tools(private_client):
     _, client = private_client
     response = initialized(client, TOKEN)
     assert response.status_code == 200
@@ -90,12 +90,16 @@ def test_private_mode_initializes_and_lists_only_existing_read_only_tools(privat
     assert listing.status_code == 200
     tools = listing.json()["result"]["tools"]
     assert {tool["name"] for tool in tools} == {
-        "service_status", "list_accounts", "list_folders", "search_messages", "read_message"
+        "service_status", "list_accounts", "list_folders", "search_messages", "read_message",
+        "read_message_by_reference", "list_attachments",
     }
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is True
         assert tool["annotations"]["destructiveHint"] is False
-    assert not {"send_mail", "delete_message", "move_message", "mark_read"} & {tool["name"] for tool in tools}
+    assert not {
+        "send_mail", "delete_message", "move_message", "mark_read", "read_attachment",
+        "download_attachment",
+    } & {tool["name"] for tool in tools}
 
 
 def test_standard_and_urlsafe_base64_tokens_are_supported():
